@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../services/audio/audio_service.dart';
@@ -61,56 +62,286 @@ final userConversationsProvider = StreamProvider<List<ConversationModel>>((
   return chatService.conversationsStream(authUser.uid);
 });
 
-/// Real-time stream of messages inside a specific conversation
+const int kMessagesPageSize = 25;
+const int kConversationsPageSize = 30;
+
+class MessagesPaginationState {
+  const MessagesPaginationState({
+    required this.messages,
+    this.isLoadingMore = false,
+    this.hasMore = true,
+    this.error,
+    this.oldestDocument,
+  });
+
+  final List<MessageModel> messages;
+  final bool isLoadingMore;
+  final bool hasMore;
+  final String? error;
+  final DocumentSnapshot<Map<String, dynamic>>? oldestDocument;
+
+  MessagesPaginationState copyWith({
+    List<MessageModel>? messages,
+    bool? isLoadingMore,
+    bool? hasMore,
+    String? error,
+    DocumentSnapshot<Map<String, dynamic>>? oldestDocument,
+    bool clearError = false,
+  }) {
+    return MessagesPaginationState(
+      messages: messages ?? this.messages,
+      isLoadingMore: isLoadingMore ?? this.isLoadingMore,
+      hasMore: hasMore ?? this.hasMore,
+      error: clearError ? null : (error ?? this.error),
+      oldestDocument: oldestDocument ?? this.oldestDocument,
+    );
+  }
+}
+
+/// Real-time stream of messages inside a specific conversation (initial page).
 final conversationMessagesProvider =
     StreamProvider.family<List<MessageModel>, String>((ref, conversationId) {
       final chatService = ref.watch(chatServiceProvider);
-      return chatService.messagesStream(conversationId);
+      return chatService.messagesStream(conversationId, limit: kMessagesPageSize);
     });
+
+/// Notifier provider for cursor-paginated messages combining real-time stream + older pages + offline queue
+final conversationPaginatedMessagesProvider = NotifierProvider.family<
+    ConversationPaginatedMessagesNotifier,
+    MessagesPaginationState,
+    String>(
+  (conversationId) => ConversationPaginatedMessagesNotifier(conversationId),
+);
+
+class ConversationPaginatedMessagesNotifier
+    extends Notifier<MessagesPaginationState> {
+  ConversationPaginatedMessagesNotifier(this.conversationId);
+
+  final String conversationId;
+
+  final List<MessageModel> _olderMessages = [];
+  DocumentSnapshot<Map<String, dynamic>>? _oldestDocument;
+  bool _isLoadingMore = false;
+  bool _hasMore = true;
+  String? _error;
+
+  @override
+  MessagesPaginationState build() {
+    final firestoreMessages =
+        ref.watch(conversationMessagesProvider(conversationId)).asData?.value ??
+            [];
+    final offlineQueue =
+        ref.watch(offlineQueueStreamProvider).asData?.value ?? [];
+
+    if (_olderMessages.isEmpty && firestoreMessages.isNotEmpty) {
+      if (firestoreMessages.length < kMessagesPageSize) {
+        _hasMore = false;
+      }
+    }
+
+    final merged = _mergeMessages(
+      streamMessages: firestoreMessages,
+      olderMessages: _olderMessages,
+      offlineQueue: offlineQueue,
+    );
+
+    return MessagesPaginationState(
+      messages: merged,
+      isLoadingMore: _isLoadingMore,
+      hasMore: _hasMore,
+      error: _error,
+      oldestDocument: _oldestDocument,
+    );
+  }
+
+  List<MessageModel> _mergeMessages({
+    required List<MessageModel> streamMessages,
+    required List<MessageModel> olderMessages,
+    required List<dynamic> offlineQueue,
+  }) {
+    final Map<String, MessageModel> messageMap = {};
+
+    // 1. Stream messages: freshest real-time updates (text, reactions, deleted status)
+    for (final msg in streamMessages) {
+      messageMap[msg.id] = msg;
+    }
+
+    // 2. Older messages: historical messages fetched via cursor pagination
+    for (final msg in olderMessages) {
+      messageMap.putIfAbsent(msg.id, () => msg);
+    }
+
+    // 3. Offline queue: messages saved locally pending sync or sent via Nearby mesh
+    for (final queued in offlineQueue) {
+      if (queued.conversationId == conversationId) {
+        final offlineMsg = queued.toMessageModel();
+        messageMap.putIfAbsent(offlineMsg.id, () => offlineMsg);
+      }
+    }
+
+    // 4. Exclude expired secret messages
+    final now = DateTime.now();
+    final list = messageMap.values.where((m) {
+      if (m.isSecret && m.expiresAt != null) {
+        return now.isBefore(m.expiresAt!);
+      }
+      return true;
+    }).toList();
+
+    // 5. Order descending by createdAt: index 0 is newest, last index is oldest
+    list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+    return list;
+  }
+
+  /// Fetches the next older page of messages using Firestore cursor pagination
+  Future<void> loadMore() async {
+    if (_isLoadingMore || !_hasMore) return;
+    _isLoadingMore = true;
+    _error = null;
+    state = state.copyWith(isLoadingMore: true, clearError: true);
+
+    try {
+      final chatService = ref.read(chatServiceProvider);
+
+      final cursorDoc =
+          _oldestDocument ?? chatService.getLastDocumentForConversation(conversationId);
+
+      DateTime? fallbackTimestamp;
+      if (cursorDoc == null && state.messages.isNotEmpty) {
+        fallbackTimestamp = state.messages.last.createdAt;
+      }
+
+      if (cursorDoc == null && fallbackTimestamp == null) {
+        _isLoadingMore = false;
+        _hasMore = false;
+        state = state.copyWith(isLoadingMore: false, hasMore: false);
+        return;
+      }
+
+      final result = await chatService.fetchOlderMessages(
+        conversationId: conversationId,
+        startAfterDocument: cursorDoc,
+        startAfterTimestamp: fallbackTimestamp,
+        limit: kMessagesPageSize,
+      );
+
+      if (result.error != null) {
+        _isLoadingMore = false;
+        _error = result.error;
+        state = state.copyWith(isLoadingMore: false, error: _error);
+        return;
+      }
+
+      if (result.messages.isEmpty) {
+        _isLoadingMore = false;
+        _hasMore = false;
+        state = state.copyWith(isLoadingMore: false, hasMore: false);
+        return;
+      }
+
+      _oldestDocument = result.lastDocument;
+      _hasMore = result.hasMore;
+
+      for (final msg in result.messages) {
+        if (!_olderMessages.any((m) => m.id == msg.id)) {
+          _olderMessages.add(msg);
+        }
+      }
+
+      _isLoadingMore = false;
+
+      final streamMessages =
+          ref.read(conversationMessagesProvider(conversationId)).asData?.value ??
+              [];
+      final offlineQueue =
+          ref.read(offlineQueueStreamProvider).asData?.value ?? [];
+
+      final merged = _mergeMessages(
+        streamMessages: streamMessages,
+        olderMessages: _olderMessages,
+        offlineQueue: offlineQueue,
+      );
+
+      state = state.copyWith(
+        messages: merged,
+        isLoadingMore: false,
+        hasMore: _hasMore,
+        oldestDocument: _oldestDocument,
+      );
+    } catch (e) {
+      _isLoadingMore = false;
+      _error = e.toString();
+      state = state.copyWith(isLoadingMore: false, error: _error);
+    }
+  }
+
+  void updateLocalReaction(String messageId, String userId, String emoji) {
+    for (int i = 0; i < _olderMessages.length; i++) {
+      if (_olderMessages[i].id == messageId) {
+        final newReactions = Map<String, String>.from(_olderMessages[i].reactions);
+        if (newReactions[userId] == emoji) {
+          newReactions.remove(userId);
+        } else {
+          newReactions[userId] = emoji;
+        }
+        _olderMessages[i] = _olderMessages[i].copyWith(reactions: newReactions);
+        break;
+      }
+    }
+
+    final updatedAll = state.messages.map((m) {
+      if (m.id == messageId) {
+        final newReactions = Map<String, String>.from(m.reactions);
+        if (newReactions[userId] == emoji) {
+          newReactions.remove(userId);
+        } else {
+          newReactions[userId] = emoji;
+        }
+        return m.copyWith(reactions: newReactions);
+      }
+      return m;
+    }).toList();
+
+    state = state.copyWith(messages: updatedAll);
+  }
+
+  void markMessageDeleted(String messageId) {
+    for (int i = 0; i < _olderMessages.length; i++) {
+      if (_olderMessages[i].id == messageId) {
+        _olderMessages[i] = _olderMessages[i].copyWith(
+          isDeleted: true,
+          text: 'This message was deleted',
+          deletedAt: DateTime.now(),
+          reactions: {},
+        );
+        break;
+      }
+    }
+
+    final updatedAll = state.messages.map((m) {
+      if (m.id == messageId) {
+        return m.copyWith(
+          isDeleted: true,
+          text: 'This message was deleted',
+          deletedAt: DateTime.now(),
+          reactions: {},
+        );
+      }
+      return m;
+    }).toList();
+
+    state = state.copyWith(messages: updatedAll);
+  }
+}
 
 /// Real-time stream of messages inside a conversation, seamlessly combining Firestore messages
 /// with local Smart Offline Queued / Nearby direct messages.
 final conversationCombinedMessagesProvider =
     StreamProvider.family<List<MessageModel>, String>((ref, conversationId) {
-      final firestoreMessages =
-          ref
-              .watch(conversationMessagesProvider(conversationId))
-              .asData
-              ?.value ??
-          [];
-      final offlineQueue =
-          ref.watch(offlineQueueStreamProvider).asData?.value ?? [];
-
-      final offlineForThisConversation = offlineQueue
-          .where((m) => m.conversationId == conversationId)
-          .map((m) => m.toMessageModel())
-          .toList();
-
-      if (offlineForThisConversation.isEmpty) {
-        final filtered = List<MessageModel>.from(firestoreMessages)
-          ..removeWhere(
-            (m) => m.expiresAt != null && DateTime.now().isAfter(m.expiresAt!),
-          );
-        return Stream.value(filtered);
-      }
-
-      final firestoreIds = firestoreMessages.map((m) => m.id).toSet();
-      final combined = List<MessageModel>.from(firestoreMessages);
-
-      for (final offlineMsg in offlineForThisConversation) {
-        if (!firestoreIds.contains(offlineMsg.id)) {
-          combined.add(offlineMsg);
-        }
-      }
-
-      // Filter out expired secret messages
-      final now = DateTime.now();
-      combined.removeWhere(
-        (m) => m.expiresAt != null && now.isAfter(m.expiresAt!),
-      );
-
-      combined.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-      return Stream.value(combined);
+      final paginatedState =
+          ref.watch(conversationPaginatedMessagesProvider(conversationId));
+      return Stream.value(paginatedState.messages);
     });
 
 /// Real-time stream of another user's live profile and online status
@@ -334,6 +565,10 @@ class ChatController extends Notifier<AsyncValue<void>> {
     final currentUserId = ref.read(authStateChangesProvider).asData?.value?.uid;
     if (currentUserId == null) return;
 
+    ref
+        .read(conversationPaginatedMessagesProvider(conversationId).notifier)
+        .updateLocalReaction(messageId, currentUserId, emoji);
+
     try {
       final chatService = ref.read(chatServiceProvider);
       await chatService.toggleReaction(
@@ -351,6 +586,10 @@ class ChatController extends Notifier<AsyncValue<void>> {
   }) async {
     final currentUserId = ref.read(authStateChangesProvider).asData?.value?.uid;
     if (currentUserId == null) return;
+
+    ref
+        .read(conversationPaginatedMessagesProvider(conversationId).notifier)
+        .markMessageDeleted(messageId);
 
     try {
       final chatService = ref.read(chatServiceProvider);

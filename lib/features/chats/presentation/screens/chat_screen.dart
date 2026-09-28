@@ -68,6 +68,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     super.initState();
     _textController.addListener(_onTextChanged);
     _focusNode.addListener(_onFocusChanged);
+    _scrollController.addListener(_onScroll);
 
     // Mark conversation as read on screen entry
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -82,10 +83,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _recordingTimer?.cancel();
     _textController.removeListener(_onTextChanged);
     _focusNode.removeListener(_onFocusChanged);
+    _scrollController.removeListener(_onScroll);
     _textController.dispose();
     _scrollController.dispose();
     _focusNode.dispose();
     super.dispose();
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    final maxScroll = _scrollController.position.maxScrollExtent;
+    final currentScroll = _scrollController.position.pixels;
+    // When user scrolls towards older messages (top of reverse ListView), fetch next page
+    if (currentScroll >= maxScroll - 250) {
+      ref
+          .read(conversationPaginatedMessagesProvider(widget.conversationId).notifier)
+          .loadMore();
+    }
   }
 
   void _onFocusChanged() {
@@ -690,6 +704,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final messagesAsync = ref.watch(
       conversationCombinedMessagesProvider(widget.conversationId),
     );
+    final paginatedState = ref.watch(
+      conversationPaginatedMessagesProvider(widget.conversationId),
+    );
     final replyingMessage = ref.watch(replyingMessageProvider);
 
     return Scaffold(
@@ -1047,14 +1064,67 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     );
                   }
 
+                  final bool showLoadingMore = paginatedState.isLoadingMore;
+                  final bool showRetry =
+                      paginatedState.error != null && paginatedState.hasMore;
+                  final int extraCount =
+                      (showLoadingMore || showRetry) ? 1 : 0;
+
                   return ListView.builder(
                     controller: _scrollController,
                     reverse: true,
                     padding: const EdgeInsets.symmetric(
                       vertical: AppSpacing.sm,
                     ),
-                    itemCount: messages.length,
+                    itemCount: messages.length + extraCount,
                     itemBuilder: (context, index) {
+                      if (index == messages.length) {
+                        if (showLoadingMore) {
+                          return const Padding(
+                            padding: EdgeInsets.symmetric(
+                              vertical: AppSpacing.md,
+                            ),
+                            child: Center(
+                              child: SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                            ),
+                          );
+                        }
+                        if (showRetry) {
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(
+                              vertical: AppSpacing.sm,
+                            ),
+                            child: Center(
+                              child: TextButton.icon(
+                                icon: const Icon(
+                                  Icons.refresh_rounded,
+                                  size: 16,
+                                ),
+                                label: const Text(
+                                  'Tap to retry loading older messages',
+                                  style: TextStyle(fontSize: 12),
+                                ),
+                                onPressed: () {
+                                  ref
+                                      .read(
+                                        conversationPaginatedMessagesProvider(
+                                          widget.conversationId,
+                                        ).notifier,
+                                      )
+                                      .loadMore();
+                                },
+                              ),
+                            ),
+                          );
+                        }
+                      }
+
                       final message = messages[index];
                       final isMe = message.senderId == currentUserId;
 

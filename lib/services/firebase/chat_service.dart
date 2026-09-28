@@ -81,13 +81,23 @@ class ChatService {
     return newConversation;
   }
 
+  final Map<String, DocumentSnapshot<Map<String, dynamic>>> _lastStreamDocs = {};
+
+  DocumentSnapshot<Map<String, dynamic>>? getLastDocumentForConversation(
+    String conversationId,
+  ) => _lastStreamDocs[conversationId];
+
   /// Real-time stream of all conversations for the given user, ordered by most recent activity.
-  Stream<List<ConversationModel>> conversationsStream(String currentUserId) {
+  Stream<List<ConversationModel>> conversationsStream(
+    String currentUserId, {
+    int limit = 30,
+  }) {
     try {
       if (Firebase.apps.isEmpty) return const Stream.empty();
       return _conversationsRef
           .where('participants', arrayContains: currentUserId)
           .orderBy('updatedAt', descending: true)
+          .limit(limit)
           .snapshots()
           .map((snapshot) {
             return snapshot.docs
@@ -99,26 +109,141 @@ class ChatService {
     }
   }
 
+  /// Real-time snapshot stream of messages inside a conversation.
+  Stream<QuerySnapshot<Map<String, dynamic>>> messagesSnapshotsStream(
+    String conversationId, {
+    int limit = 25,
+  }) {
+    if (Firebase.apps.isEmpty) return const Stream.empty();
+    return _conversationsRef
+        .doc(conversationId)
+        .collection('messages')
+        .orderBy('createdAt', descending: true)
+        .limit(limit)
+        .snapshots();
+  }
+
   /// Real-time stream of messages inside a conversation, ordered descending for reverse list view.
   Stream<List<MessageModel>> messagesStream(
     String conversationId, {
-    int limit = 100,
+    int limit = 25,
   }) {
     try {
       if (Firebase.apps.isEmpty) return const Stream.empty();
-      return _conversationsRef
-          .doc(conversationId)
-          .collection('messages')
-          .orderBy('createdAt', descending: true)
-          .limit(limit)
-          .snapshots()
-          .map((snapshot) {
-            return snapshot.docs
-                .map((doc) => MessageModel.fromFirestore(doc))
-                .toList();
-          });
+      return messagesSnapshotsStream(conversationId, limit: limit).map((snapshot) {
+        if (snapshot.docs.isNotEmpty) {
+          _lastStreamDocs[conversationId] = snapshot.docs.last;
+        }
+        return snapshot.docs
+            .map((doc) => MessageModel.fromFirestore(doc))
+            .toList();
+      });
     } catch (_) {
       return const Stream.empty();
+    }
+  }
+
+  /// Fetches older messages using cursor-based pagination (startAfterDocument).
+  Future<PaginatedMessagesResult> fetchOlderMessages({
+    required String conversationId,
+    DocumentSnapshot<Map<String, dynamic>>? startAfterDocument,
+    DateTime? startAfterTimestamp,
+    int limit = 25,
+  }) async {
+    try {
+      if (Firebase.apps.isEmpty) {
+        return const PaginatedMessagesResult(
+          messages: [],
+          lastDocument: null,
+          hasMore: false,
+        );
+      }
+
+      Query<Map<String, dynamic>> query = _conversationsRef
+          .doc(conversationId)
+          .collection('messages')
+          .orderBy('createdAt', descending: true);
+
+      final cursorDoc = startAfterDocument ?? _lastStreamDocs[conversationId];
+      if (cursorDoc != null) {
+        query = query.startAfterDocument(cursorDoc);
+      } else if (startAfterTimestamp != null) {
+        query = query.startAfter([Timestamp.fromDate(startAfterTimestamp)]);
+      }
+
+      query = query.limit(limit);
+
+      final snapshot = await query.get();
+      final messages = snapshot.docs
+          .map((doc) => MessageModel.fromFirestore(doc))
+          .toList();
+
+      final lastDoc = snapshot.docs.isNotEmpty ? snapshot.docs.last : null;
+      final hasMore = snapshot.docs.length >= limit;
+
+      return PaginatedMessagesResult(
+        messages: messages,
+        lastDocument: lastDoc,
+        hasMore: hasMore,
+      );
+    } catch (e) {
+      return PaginatedMessagesResult(
+        messages: [],
+        lastDocument: null,
+        hasMore: false,
+        error: e.toString(),
+      );
+    }
+  }
+
+  /// Fetches older conversations for a user using cursor-based pagination.
+  Future<PaginatedConversationsResult> fetchOlderConversations({
+    required String currentUserId,
+    DocumentSnapshot<Map<String, dynamic>>? startAfterDocument,
+    DateTime? startAfterTimestamp,
+    int limit = 30,
+  }) async {
+    try {
+      if (Firebase.apps.isEmpty) {
+        return const PaginatedConversationsResult(
+          conversations: [],
+          lastDocument: null,
+          hasMore: false,
+        );
+      }
+
+      Query<Map<String, dynamic>> query = _conversationsRef
+          .where('participants', arrayContains: currentUserId)
+          .orderBy('updatedAt', descending: true);
+
+      if (startAfterDocument != null) {
+        query = query.startAfterDocument(startAfterDocument);
+      } else if (startAfterTimestamp != null) {
+        query = query.startAfter([Timestamp.fromDate(startAfterTimestamp)]);
+      }
+
+      query = query.limit(limit);
+
+      final snapshot = await query.get();
+      final conversations = snapshot.docs
+          .map((doc) => ConversationModel.fromFirestore(doc))
+          .toList();
+
+      final lastDoc = snapshot.docs.isNotEmpty ? snapshot.docs.last : null;
+      final hasMore = snapshot.docs.length >= limit;
+
+      return PaginatedConversationsResult(
+        conversations: conversations,
+        lastDocument: lastDoc,
+        hasMore: hasMore,
+      );
+    } catch (e) {
+      return PaginatedConversationsResult(
+        conversations: [],
+        lastDocument: null,
+        hasMore: false,
+        error: e.toString(),
+      );
     }
   }
 
@@ -466,3 +591,32 @@ class ChatService {
     await messageDocRef.update({'metadata.game.answers.$userId': answer});
   }
 }
+
+class PaginatedMessagesResult {
+  const PaginatedMessagesResult({
+    required this.messages,
+    this.lastDocument,
+    required this.hasMore,
+    this.error,
+  });
+
+  final List<MessageModel> messages;
+  final DocumentSnapshot<Map<String, dynamic>>? lastDocument;
+  final bool hasMore;
+  final String? error;
+}
+
+class PaginatedConversationsResult {
+  const PaginatedConversationsResult({
+    required this.conversations,
+    this.lastDocument,
+    required this.hasMore,
+    this.error,
+  });
+
+  final List<ConversationModel> conversations;
+  final DocumentSnapshot<Map<String, dynamic>>? lastDocument;
+  final bool hasMore;
+  final String? error;
+}
+
