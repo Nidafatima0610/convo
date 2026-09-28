@@ -1,0 +1,22 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Chat media files partitioned by user and conversation
+    match /users/{userId}/chats/{conversationId}/{allPaths=**} {
+      // Only authenticated users can read chat attachments
+      allow read: if request.auth != null;
+      // Only the sender can upload media to their own chat directory, limited to 50MB
+      allow write: if request.auth != null 
+        && request.auth.uid == userId
+        && request.resource.size < 50 * 1024 * 1024;
+    }
+
+    // Profile photos
+    match /users/{userId}/profile/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null 
+        && request.auth.uid == userId
+        && request.resource.size < 5 * 1024 * 1024;
+    }
+  }
+}

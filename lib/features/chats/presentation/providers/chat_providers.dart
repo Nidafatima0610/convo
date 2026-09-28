@@ -1,0 +1,377 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../../../services/audio/audio_service.dart';
+import '../../../../services/firebase/chat_service.dart';
+import '../../../../services/firebase/media_service.dart';
+import '../../../../services/notifications/notification_service.dart';
+import '../../../auth/domain/models/convo_user.dart';
+import '../../../auth/presentation/providers/auth_providers.dart';
+import '../../domain/models/conversation_model.dart';
+import '../../domain/models/message_model.dart';
+import '../../../nearby/presentation/providers/nearby_providers.dart';
+
+final chatServiceProvider = Provider<ChatService>((ref) {
+  return ChatService();
+});
+
+final notificationServiceProvider = Provider<NotificationService>((ref) {
+  return NotificationService();
+});
+
+final mediaServiceProvider = Provider<MediaService>((ref) {
+  return MediaService();
+});
+
+final audioServiceProvider = Provider<AudioService>((ref) {
+  final service = AudioService();
+  ref.onDispose(service.dispose);
+  return service;
+});
+
+/// Tracks media upload progress per upload key: 0.0 to 1.0
+final mediaUploadProgressProvider =
+    NotifierProvider<MediaUploadProgressNotifier, Map<String, double>>(
+      MediaUploadProgressNotifier.new,
+    );
+
+class MediaUploadProgressNotifier extends Notifier<Map<String, double>> {
+  @override
+  Map<String, double> build() => {};
+
+  void setProgress(String key, double progress) {
+    state = {...state, key: progress};
+  }
+
+  void remove(String key) {
+    final updated = Map<String, double>.from(state)..remove(key);
+    state = updated;
+  }
+}
+
+/// Real-time stream of conversations for the currently logged-in user
+final userConversationsProvider = StreamProvider<List<ConversationModel>>((
+  ref,
+) {
+  final authUser = ref.watch(authStateChangesProvider).asData?.value;
+  if (authUser == null) {
+    return Stream.value([]);
+  }
+
+  final chatService = ref.watch(chatServiceProvider);
+  return chatService.conversationsStream(authUser.uid);
+});
+
+/// Real-time stream of messages inside a specific conversation
+final conversationMessagesProvider =
+    StreamProvider.family<List<MessageModel>, String>((ref, conversationId) {
+      final chatService = ref.watch(chatServiceProvider);
+      return chatService.messagesStream(conversationId);
+    });
+
+/// Real-time stream of messages inside a conversation, seamlessly combining Firestore messages
+/// with local Smart Offline Queued / Nearby direct messages.
+final conversationCombinedMessagesProvider =
+    StreamProvider.family<List<MessageModel>, String>((ref, conversationId) {
+      final firestoreMessages =
+          ref
+              .watch(conversationMessagesProvider(conversationId))
+              .asData
+              ?.value ??
+          [];
+      final offlineQueue =
+          ref.watch(offlineQueueStreamProvider).asData?.value ?? [];
+
+      final offlineForThisConversation = offlineQueue
+          .where((m) => m.conversationId == conversationId)
+          .map((m) => m.toMessageModel())
+          .toList();
+
+      if (offlineForThisConversation.isEmpty) {
+        final filtered = List<MessageModel>.from(firestoreMessages)
+          ..removeWhere(
+            (m) => m.expiresAt != null && DateTime.now().isAfter(m.expiresAt!),
+          );
+        return Stream.value(filtered);
+      }
+
+      final firestoreIds = firestoreMessages.map((m) => m.id).toSet();
+      final combined = List<MessageModel>.from(firestoreMessages);
+
+      for (final offlineMsg in offlineForThisConversation) {
+        if (!firestoreIds.contains(offlineMsg.id)) {
+          combined.add(offlineMsg);
+        }
+      }
+
+      // Filter out expired secret messages
+      final now = DateTime.now();
+      combined.removeWhere(
+        (m) => m.expiresAt != null && now.isAfter(m.expiresAt!),
+      );
+
+      combined.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      return Stream.value(combined);
+    });
+
+/// Real-time stream of another user's live profile and online status
+final userPresenceProvider = StreamProvider.family<ConvoUser?, String>((
+  ref,
+  userId,
+) {
+  if (userId.isEmpty) return Stream.value(null);
+  final firestoreService = ref.watch(firestoreServiceProvider);
+  return firestoreService.userProfileStream(userId);
+});
+
+/// State provider for tracking which message the user is currently replying to
+final replyingMessageProvider =
+    NotifierProvider<ReplyingMessageNotifier, MessageModel?>(
+      ReplyingMessageNotifier.new,
+    );
+
+class ReplyingMessageNotifier extends Notifier<MessageModel?> {
+  @override
+  MessageModel? build() => null;
+
+  void setMessage(MessageModel? message) => state = message;
+  void clear() => state = null;
+}
+
+/// Search query provider for finding users
+final userSearchQueryProvider =
+    NotifierProvider<UserSearchQueryNotifier, String>(
+      UserSearchQueryNotifier.new,
+    );
+
+class UserSearchQueryNotifier extends Notifier<String> {
+  @override
+  String build() => '';
+
+  void setQuery(String query) => state = query;
+}
+
+/// Fetches users matching the search query
+final searchedUsersProvider = FutureProvider.family<List<ConvoUser>, String>((
+  ref,
+  query,
+) async {
+  final currentUserId =
+      ref.watch(authStateChangesProvider).asData?.value?.uid ?? '';
+  final chatService = ref.watch(chatServiceProvider);
+  return chatService.searchUsers(query: query, currentUserId: currentUserId);
+});
+
+/// Action controller for chat operations (sending, deleting, reacting, reading, media)
+final chatControllerProvider =
+    NotifierProvider<ChatController, AsyncValue<void>>(ChatController.new);
+
+class ChatController extends Notifier<AsyncValue<void>> {
+  @override
+  AsyncValue<void> build() {
+    return const AsyncValue.data(null);
+  }
+
+  Future<bool> sendMessage({
+    required String conversationId,
+    required String receiverId,
+    required String text,
+    String type = 'text',
+    String? replyToMessageId,
+    String? replyToSnippet,
+    String? replyToSenderName,
+    Map<String, dynamic>? metadata,
+    DateTime? expiresAt,
+    bool isSecret = false,
+    bool forceOfflineNearby = false,
+  }) async {
+    final currentUser = ref.read(authStateChangesProvider).asData?.value;
+    if (currentUser == null || text.trim().isEmpty) return false;
+
+    state = const AsyncValue.loading();
+    try {
+      final nearbyService = ref.read(nearbyServiceProvider);
+      final isNearbyConnected = nearbyService.isConnectedToUser(receiverId);
+
+      // If forceOfflineNearby or peer is directly connected via Nearby
+      if (forceOfflineNearby || isNearbyConnected) {
+        final offlineSync = ref.read(offlineSyncServiceProvider);
+        await offlineSync.sendOrQueueMessage(
+          conversationId: conversationId,
+          senderId: currentUser.uid,
+          receiverId: receiverId,
+          text: text,
+          type: type,
+        );
+        ref.read(replyingMessageProvider.notifier).clear();
+        state = const AsyncValue.data(null);
+        return true;
+      }
+
+      // Try standard Firebase messaging transport
+      try {
+        final chatService = ref.read(chatServiceProvider);
+        await chatService.sendMessage(
+          conversationId: conversationId,
+          senderId: currentUser.uid,
+          receiverId: receiverId,
+          text: text,
+          type: type,
+          replyToMessageId: replyToMessageId,
+          replyToSnippet: replyToSnippet,
+          replyToSenderName: replyToSenderName,
+          metadata: metadata,
+          expiresAt: expiresAt,
+          isSecret: isSecret,
+        );
+      } catch (networkError) {
+        // Network unavailable or Firebase write failed: fallback to Smart Offline Queue!
+        final offlineSync = ref.read(offlineSyncServiceProvider);
+        await offlineSync.sendOrQueueMessage(
+          conversationId: conversationId,
+          senderId: currentUser.uid,
+          receiverId: receiverId,
+          text: text,
+          type: type,
+        );
+      }
+
+      ref.read(replyingMessageProvider.notifier).clear();
+      state = const AsyncValue.data(null);
+      return true;
+    } catch (e, st) {
+      state = AsyncValue.error(e.toString(), st);
+      return false;
+    }
+  }
+
+  Future<bool> sendMediaMessage({
+    required String conversationId,
+    required String receiverId,
+    required String type,
+    required String mediaUrl,
+    String text = '',
+    String? thumbnailUrl,
+    String? fileName,
+    int? fileSize,
+    int? durationMs,
+    String? replyToMessageId,
+    String? replyToSnippet,
+    String? replyToSenderName,
+    Map<String, dynamic>? metadata,
+    DateTime? expiresAt,
+    bool isSecret = false,
+  }) async {
+    final currentUser = ref.read(authStateChangesProvider).asData?.value;
+    if (currentUser == null) return false;
+
+    state = const AsyncValue.loading();
+    try {
+      final chatService = ref.read(chatServiceProvider);
+      await chatService.sendMediaMessage(
+        conversationId: conversationId,
+        senderId: currentUser.uid,
+        receiverId: receiverId,
+        type: type,
+        mediaUrl: mediaUrl,
+        text: text,
+        thumbnailUrl: thumbnailUrl,
+        fileName: fileName,
+        fileSize: fileSize,
+        durationMs: durationMs,
+        replyToMessageId: replyToMessageId,
+        replyToSnippet: replyToSnippet,
+        replyToSenderName: replyToSenderName,
+        metadata: metadata,
+        expiresAt: expiresAt,
+        isSecret: isSecret,
+      );
+
+      ref.read(replyingMessageProvider.notifier).clear();
+      state = const AsyncValue.data(null);
+      return true;
+    } catch (e, st) {
+      state = AsyncValue.error(e.toString(), st);
+      return false;
+    }
+  }
+
+  Future<void> submitGameAnswer({
+    required String conversationId,
+    required String messageId,
+    required String answer,
+  }) async {
+    final currentUserId = ref.read(authStateChangesProvider).asData?.value?.uid;
+    if (currentUserId == null) return;
+    try {
+      final chatService = ref.read(chatServiceProvider);
+      await chatService.submitGameAnswer(
+        conversationId: conversationId,
+        messageId: messageId,
+        userId: currentUserId,
+        answer: answer,
+      );
+    } catch (_) {}
+  }
+
+  Future<void> markAsRead(String conversationId) async {
+    final currentUserId = ref.read(authStateChangesProvider).asData?.value?.uid;
+    if (currentUserId == null) return;
+
+    try {
+      final chatService = ref.read(chatServiceProvider);
+      await chatService.markConversationAsRead(
+        conversationId: conversationId,
+        currentUserId: currentUserId,
+      );
+    } catch (_) {}
+  }
+
+  Future<void> toggleReaction({
+    required String conversationId,
+    required String messageId,
+    required String emoji,
+  }) async {
+    final currentUserId = ref.read(authStateChangesProvider).asData?.value?.uid;
+    if (currentUserId == null) return;
+
+    try {
+      final chatService = ref.read(chatServiceProvider);
+      await chatService.toggleReaction(
+        conversationId: conversationId,
+        messageId: messageId,
+        userId: currentUserId,
+        emoji: emoji,
+      );
+    } catch (_) {}
+  }
+
+  Future<void> deleteMessage({
+    required String conversationId,
+    required String messageId,
+  }) async {
+    final currentUserId = ref.read(authStateChangesProvider).asData?.value?.uid;
+    if (currentUserId == null) return;
+
+    try {
+      final chatService = ref.read(chatServiceProvider);
+      await chatService.deleteMessage(
+        conversationId: conversationId,
+        messageId: messageId,
+        userId: currentUserId,
+      );
+    } catch (e, st) {
+      state = AsyncValue.error(e.toString(), st);
+    }
+  }
+
+  Future<void> clearChat(String conversationId) async {
+    try {
+      final chatService = ref.read(chatServiceProvider);
+      await chatService.clearConversationMessages(
+        conversationId: conversationId,
+      );
+    } catch (e, st) {
+      state = AsyncValue.error(e.toString(), st);
+    }
+  }
+}
