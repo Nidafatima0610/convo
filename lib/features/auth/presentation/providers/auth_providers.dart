@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../services/firebase/auth_service.dart';
 import '../../../../services/firebase/firestore_service.dart';
+import '../../../chats/presentation/providers/chat_providers.dart'
+    show mediaServiceProvider;
 import '../../domain/models/convo_user.dart';
 
 final authServiceProvider = Provider<AuthService>((ref) {
@@ -54,7 +56,11 @@ class AuthController extends Notifier<AsyncValue<void>> {
       // Update online presence if user exists
       if (cred.user != null) {
         final firestoreService = ref.read(firestoreServiceProvider);
-        await firestoreService.updateUserOnlineStatus(cred.user!.uid, true);
+        await firestoreService.updateUserOnlineStatus(
+          cred.user!.uid,
+          true,
+          force: true,
+        );
       }
 
       state = const AsyncValue.data(null);
@@ -132,7 +138,7 @@ class AuthController extends Notifier<AsyncValue<void>> {
       if (currentUser != null) {
         await ref
             .read(firestoreServiceProvider)
-            .updateUserOnlineStatus(currentUser.uid, false);
+            .updateUserOnlineStatus(currentUser.uid, false, force: true);
       }
       await ref.read(authServiceProvider).signOut();
       state = const AsyncValue.data(null);
@@ -143,5 +149,160 @@ class AuthController extends Notifier<AsyncValue<void>> {
 
   void resetError() {
     state = const AsyncValue.data(null);
+  }
+}
+
+/// Controller for user profile modifications (display name, bio, DP, privacy, notification settings, block)
+final profileControllerProvider =
+    NotifierProvider<ProfileController, AsyncValue<void>>(
+      ProfileController.new,
+    );
+
+class ProfileController extends Notifier<AsyncValue<void>> {
+  @override
+  AsyncValue<void> build() {
+    return const AsyncValue.data(null);
+  }
+
+  Future<bool> updateDisplayName(String name) async {
+    final user = ref.read(authStateChangesProvider).asData?.value;
+    if (user == null) return false;
+
+    state = const AsyncValue.loading();
+    try {
+      final firestoreService = ref.read(firestoreServiceProvider);
+      await firestoreService.updateUserProfile(
+        uid: user.uid,
+        name: name.trim(),
+      );
+      state = const AsyncValue.data(null);
+      return true;
+    } catch (e, st) {
+      state = AsyncValue.error(e.toString(), st);
+      return false;
+    }
+  }
+
+  Future<bool> updateBio(String bio) async {
+    final user = ref.read(authStateChangesProvider).asData?.value;
+    if (user == null) return false;
+
+    state = const AsyncValue.loading();
+    try {
+      final firestoreService = ref.read(firestoreServiceProvider);
+      await firestoreService.updateUserBio(user.uid, bio.trim());
+      state = const AsyncValue.data(null);
+      return true;
+    } catch (e, st) {
+      state = AsyncValue.error(e.toString(), st);
+      return false;
+    }
+  }
+
+  Future<String?> uploadProfilePicture(String filePath) async {
+    final user = ref.read(authStateChangesProvider).asData?.value;
+    if (user == null) return null;
+
+    state = const AsyncValue.loading();
+    try {
+      final mediaService = ref.read(mediaServiceProvider);
+      final downloadUrl = await mediaService.uploadProfilePicture(
+        filePath: filePath,
+        userId: user.uid,
+      );
+
+      if (downloadUrl != null) {
+        final firestoreService = ref.read(firestoreServiceProvider);
+        await firestoreService.updateUserProfilePicture(user.uid, downloadUrl);
+      }
+
+      state = const AsyncValue.data(null);
+      return downloadUrl;
+    } catch (e, st) {
+      state = AsyncValue.error(e.toString(), st);
+      return null;
+    }
+  }
+
+  Future<bool> removeProfilePicture() async {
+    final user = ref.read(authStateChangesProvider).asData?.value;
+    if (user == null) return false;
+
+    state = const AsyncValue.loading();
+    try {
+      final firestoreService = ref.read(firestoreServiceProvider);
+      await firestoreService.updateUserProfilePicture(user.uid, null);
+      state = const AsyncValue.data(null);
+      return true;
+    } catch (e, st) {
+      state = AsyncValue.error(e.toString(), st);
+      return false;
+    }
+  }
+
+  Future<bool> updatePrivacySettings(Map<String, dynamic> settings) async {
+    final user = ref.read(authStateChangesProvider).asData?.value;
+    if (user == null) return false;
+
+    state = const AsyncValue.loading();
+    try {
+      final firestoreService = ref.read(firestoreServiceProvider);
+      await firestoreService.updatePrivacySettings(user.uid, settings);
+      state = const AsyncValue.data(null);
+      return true;
+    } catch (e, st) {
+      state = AsyncValue.error(e.toString(), st);
+      return false;
+    }
+  }
+
+  Future<bool> updateNotificationSettings(
+    Map<String, dynamic> settings,
+  ) async {
+    final user = ref.read(authStateChangesProvider).asData?.value;
+    if (user == null) return false;
+
+    state = const AsyncValue.loading();
+    try {
+      final firestoreService = ref.read(firestoreServiceProvider);
+      await firestoreService.updateNotificationSettings(user.uid, settings);
+      state = const AsyncValue.data(null);
+      return true;
+    } catch (e, st) {
+      state = AsyncValue.error(e.toString(), st);
+      return false;
+    }
+  }
+
+  Future<bool> blockUser(String targetUserId) async {
+    final user = ref.read(authStateChangesProvider).asData?.value;
+    if (user == null) return false;
+
+    state = const AsyncValue.loading();
+    try {
+      final firestoreService = ref.read(firestoreServiceProvider);
+      await firestoreService.blockUser(user.uid, targetUserId);
+      state = const AsyncValue.data(null);
+      return true;
+    } catch (e, st) {
+      state = AsyncValue.error(e.toString(), st);
+      return false;
+    }
+  }
+
+  Future<bool> unblockUser(String targetUserId) async {
+    final user = ref.read(authStateChangesProvider).asData?.value;
+    if (user == null) return false;
+
+    state = const AsyncValue.loading();
+    try {
+      final firestoreService = ref.read(firestoreServiceProvider);
+      await firestoreService.unblockUser(user.uid, targetUserId);
+      state = const AsyncValue.data(null);
+      return true;
+    } catch (e, st) {
+      state = AsyncValue.error(e.toString(), st);
+      return false;
+    }
   }
 }

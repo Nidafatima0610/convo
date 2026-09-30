@@ -101,4 +101,132 @@ class MediaService {
       rethrow;
     }
   }
+
+  /// Picks an image for user profile/avatar with optimized square dimensions and compression.
+  Future<XFile?> pickProfileImage({required ImageSource source}) async {
+    try {
+      final file = await _picker.pickImage(
+        source: source,
+        imageQuality: 85,
+        maxWidth: 1024,
+        maxHeight: 1024,
+      );
+      return file;
+    } catch (e) {
+      debugPrint('Error picking profile image: $e');
+      return null;
+    }
+  }
+
+  /// Uploads a user profile picture to Firebase Storage.
+  /// Follows the secure path: users/{userId}/profile/{timestamp}_dp.jpg (< 5MB limit).
+  Future<String?> uploadProfilePicture({
+    required String filePath,
+    required String userId,
+    ValueChanged<double>? onProgress,
+  }) async {
+    try {
+      if (Firebase.apps.isEmpty) {
+        throw Exception('Firebase is not initialized');
+      }
+
+      final file = File(filePath);
+      if (!await file.exists()) {
+        throw Exception('File does not exist: $filePath');
+      }
+
+      final fileSize = await file.length();
+      // Storage rules limit is 5MB (5 * 1024 * 1024 bytes)
+      if (fileSize > 5 * 1024 * 1024) {
+        throw Exception('Profile image exceeds 5MB limit');
+      }
+
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final storagePath = 'users/$userId/profile/dp_$timestamp.jpg';
+
+      final ref = _firebaseStorage.ref().child(storagePath);
+      final metadata = SettableMetadata(
+        contentType: 'image/jpeg',
+        customMetadata: {
+          'userId': userId,
+          'uploadedAt': DateTime.now().toIso8601String(),
+        },
+      );
+
+      final uploadTask = ref.putFile(file, metadata);
+
+      if (onProgress != null) {
+        uploadTask.snapshotEvents.listen((event) {
+          if (event.totalBytes > 0) {
+            final progress = event.bytesTransferred / event.totalBytes;
+            onProgress(progress);
+          }
+        });
+      }
+
+      final snapshot = await uploadTask;
+      final downloadUrl = await snapshot.ref.getDownloadURL();
+      return downloadUrl;
+    } catch (e) {
+      debugPrint('Error uploading profile picture: $e');
+      rethrow;
+    }
+  }
+
+  /// Uploads a group avatar picture to Firebase Storage.
+  /// Follows the secure path: users/{uploaderId}/groups/{groupId}/dp_{timestamp}.jpg (< 5MB limit).
+  Future<String?> uploadGroupPicture({
+    required String filePath,
+    required String groupId,
+    required String uploaderId,
+    ValueChanged<double>? onProgress,
+  }) async {
+    try {
+      if (Firebase.apps.isEmpty) {
+        throw Exception('Firebase is not initialized');
+      }
+
+      final file = File(filePath);
+      if (!await file.exists()) {
+        throw Exception('File does not exist: $filePath');
+      }
+
+      final fileSize = await file.length();
+      if (fileSize > 5 * 1024 * 1024) {
+        throw Exception('Group image exceeds 5MB limit');
+      }
+
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final storagePath = 'users/$uploaderId/groups/$groupId/dp_$timestamp.jpg';
+
+      final ref = _firebaseStorage.ref().child(storagePath);
+      final metadata = SettableMetadata(
+        contentType: 'image/jpeg',
+        customMetadata: {
+          'uploaderId': uploaderId,
+          'groupId': groupId,
+          'uploadedAt': DateTime.now().toIso8601String(),
+        },
+      );
+
+      final uploadTask = ref.putFile(file, metadata);
+
+      if (onProgress != null) {
+        uploadTask.snapshotEvents.listen((event) {
+          if (event.totalBytes > 0) {
+            final progress = event.bytesTransferred / event.totalBytes;
+            onProgress(progress);
+          }
+        });
+      }
+
+      final snapshot = await uploadTask;
+      final downloadUrl = await snapshot.ref.getDownloadURL();
+      return downloadUrl;
+    } catch (e) {
+      debugPrint('Error uploading group picture: $e');
+      rethrow;
+    }
+  }
 }
+

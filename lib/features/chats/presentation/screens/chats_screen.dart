@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../../core/constants/app_strings.dart';
+import '../../../../core/routes/app_routes.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_radius.dart';
 import '../../../../core/theme/app_spacing.dart';
@@ -15,9 +16,12 @@ import '../../../../core/widgets/convo_badge.dart';
 import '../../../../core/widgets/convo_empty_state.dart';
 import '../../../auth/domain/models/convo_user.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
+import '../../../profile/domain/privacy_helper.dart';
+import 'package:flutter/services.dart';
 import '../../domain/models/conversation_model.dart';
 import '../providers/chat_providers.dart';
 import '../widgets/user_search_modal.dart';
+import '../../../../services/local_storage/chat_preferences_service.dart';
 
 class ChatsScreen extends ConsumerStatefulWidget {
   const ChatsScreen({super.key});
@@ -44,6 +48,11 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
   }
 
   void _openConversation(ConversationModel conversation, String currentUserId) {
+    if (conversation.isGroup) {
+      context.push('/chat/${conversation.id}');
+      return;
+    }
+
     final otherId = conversation.otherParticipantId(currentUserId);
     final otherDetails = conversation.participantDetails[otherId];
 
@@ -57,6 +66,118 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
     );
 
     context.push('/chat/${conversation.id}', extra: otherUser);
+  }
+
+  void _showConversationOptions(
+    BuildContext context,
+    ConversationModel conversation,
+    bool isPinned,
+    bool isArchived,
+    bool isMuted,
+    String currentUserId,
+  ) {
+    HapticFeedback.mediumImpact();
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: context.convoColors.cardBackground,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetCtx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              margin: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: context.convoColors.cardBorder,
+                borderRadius: AppRadius.borderPill,
+              ),
+            ),
+            ListTile(
+              leading: Icon(
+                isPinned ? Icons.push_pin_outlined : Icons.push_pin_rounded,
+                color: context.colorScheme.primary,
+              ),
+              title: Text(isPinned ? 'Unpin Conversation' : 'Pin to Top'),
+              onTap: () {
+                Navigator.of(sheetCtx).pop();
+                ref
+                    .read(chatPreferencesServiceProvider)
+                    .togglePinChat(conversation.id);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      isPinned ? 'Chat unpinned' : 'Chat pinned to top',
+                    ),
+                    behavior: SnackBarBehavior.floating,
+                    duration: const Duration(seconds: 1),
+                  ),
+                );
+              },
+            ),
+            ListTile(
+              leading: Icon(
+                isArchived
+                    ? Icons.unarchive_outlined
+                    : Icons.archive_outlined,
+                color: context.colorScheme.primary,
+              ),
+              title: Text(
+                isArchived ? 'Unarchive Conversation' : 'Archive Conversation',
+              ),
+              onTap: () {
+                Navigator.of(sheetCtx).pop();
+                ref
+                    .read(chatPreferencesServiceProvider)
+                    .toggleArchiveChat(conversation.id);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      isArchived ? 'Chat unarchived' : 'Chat archived',
+                    ),
+                    behavior: SnackBarBehavior.floating,
+                    duration: const Duration(seconds: 1),
+                  ),
+                );
+              },
+            ),
+            ListTile(
+              leading: Icon(
+                isMuted
+                    ? Icons.notifications_active_outlined
+                    : Icons.notifications_off_outlined,
+                color: context.colorScheme.primary,
+              ),
+              title: Text(
+                isMuted ? 'Unmute Notifications' : 'Mute Notifications',
+              ),
+              onTap: () async {
+                Navigator.of(sheetCtx).pop();
+                await ref
+                    .read(chatControllerProvider.notifier)
+                    .toggleGroupMute(
+                      conversationId: conversation.id,
+                      mute: !isMuted,
+                    );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.mark_chat_read_rounded),
+              title: const Text('Mark as Read'),
+              onTap: () {
+                Navigator.of(sheetCtx).pop();
+                ref
+                    .read(chatControllerProvider.notifier)
+                    .markAsRead(conversation.id);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -250,12 +371,21 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
     List<ConversationModel> conversations,
     String currentUserId,
   ) {
-    // 1. Filter by query
-    var filtered = conversations;
+    final pinnedIds = ref.watch(pinnedChatIdsProvider);
+    final archivedIds = ref.watch(archivedChatIdsProvider);
+
+    // 1. Filter out archived conversations from the main chat list (unless actively searching or viewing another tab)
+    var filtered = conversations.where((c) {
+      if (_searchController.text.trim().isNotEmpty) return true;
+      return !archivedIds.contains(c.id);
+    }).toList();
+
     final query = _searchController.text.trim().toLowerCase();
     if (query.isNotEmpty) {
       filtered = filtered.where((conv) {
-        final name = conv.otherParticipantName(currentUserId).toLowerCase();
+        final name = conv.isGroup
+            ? (conv.name ?? 'Group').toLowerCase()
+            : conv.otherParticipantName(currentUserId).toLowerCase();
         final lastMsg = conv.lastMessage.toLowerCase();
         return name.contains(query) || lastMsg.contains(query);
       }).toList();
@@ -268,14 +398,27 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
           .where((conv) => conv.unreadCountFor(currentUserId) > 0)
           .toList();
     } else if (_selectedFilterIndex == 2) {
-      // Groups placeholder (0 for now)
-      filtered = [];
+      // Groups
+      filtered = filtered.where((conv) => conv.isGroup).toList();
     } else if (_selectedFilterIndex == 3) {
       // Mesh placeholder (0 for now)
       filtered = [];
     }
 
-    if (filtered.isEmpty) {
+    // 3. Sort: Pinned conversations at the top, then by updatedAt desc
+    filtered.sort((a, b) {
+      final aPinned = pinnedIds.contains(a.id);
+      final bPinned = pinnedIds.contains(b.id);
+      if (aPinned && !bPinned) return -1;
+      if (!aPinned && bPinned) return 1;
+      return b.updatedAt.compareTo(a.updatedAt);
+    });
+
+    final bool showArchivedBanner = archivedIds.isNotEmpty &&
+        _searchController.text.trim().isEmpty &&
+        _selectedFilterIndex == 0;
+
+    if (filtered.isEmpty && !showArchivedBanner) {
       if (_searchController.text.isNotEmpty) {
         return Center(
           child: Column(
@@ -336,6 +479,23 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
         );
       }
 
+      if (_selectedFilterIndex == 2) {
+        return ConvoEmptyState(
+          icon: Icons.groups_rounded,
+          title: 'No Groups Yet',
+          subtitle:
+              'Create a group to stay connected with friends, family, or teammates!',
+          actionLabel: 'Create Group',
+          actionIcon: Icons.add_rounded,
+          badge: const ConvoBadge(
+            label: 'COMMUNITY',
+            variant: ConvoBadgeVariant.accent,
+            icon: Icons.group_work_rounded,
+          ),
+          onActionPressed: () => context.push(AppRoutes.createGroup),
+        );
+      }
+
       // Default high-polish empty state
       return ConvoEmptyState(
         icon: Icons.chat_bubble_outline_rounded,
@@ -352,9 +512,11 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
       );
     }
 
+    final totalItemCount = filtered.length + (showArchivedBanner ? 1 : 0);
+
     return ListView.separated(
       padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
-      itemCount: filtered.length,
+      itemCount: totalItemCount,
       separatorBuilder: (_, _) => Divider(
         color: context.convoColors.cardBorder,
         height: 1,
@@ -362,24 +524,106 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
         endIndent: AppSpacing.lg,
       ),
       itemBuilder: (context, index) {
-        final conversation = filtered[index];
-        final otherId = conversation.otherParticipantId(currentUserId);
-        final otherName = conversation.otherParticipantName(currentUserId);
+        if (showArchivedBanner && index == 0) {
+          return ListTile(
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.lg,
+              vertical: 2,
+            ),
+            leading: Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                color: context.convoColors.surfaceSubtle,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.archive_outlined,
+                color: context.colorScheme.primary,
+                size: 24,
+              ),
+            ),
+            title: Text(
+              'Archived Chats',
+              style: AppTypography.titleMedium.copyWith(
+                color: context.convoColors.textPrimary,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            subtitle: Text(
+              '${archivedIds.length} archived conversation${archivedIds.length > 1 ? 's' : ''}',
+              style: AppTypography.bodySmall.copyWith(
+                color: context.convoColors.textSecondary,
+              ),
+            ),
+            trailing: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: context.colorScheme.primary.withValues(alpha: 0.12),
+                borderRadius: AppRadius.borderPill,
+              ),
+              child: Text(
+                '${archivedIds.length}',
+                style: AppTypography.labelSmall.copyWith(
+                  color: context.colorScheme.primary,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+            onTap: () => context.push(AppRoutes.archivedChats),
+          );
+        }
+
+        final convIndex = showArchivedBanner ? index - 1 : index;
+        final conversation = filtered[convIndex];
+        final isGroup = conversation.isGroup;
+        final isPinned = pinnedIds.contains(conversation.id);
+        final isArchived = archivedIds.contains(conversation.id);
+        final isMuted = conversation.isMutedFor(currentUserId);
+        final displayName = isGroup
+            ? (conversation.name ?? 'Group')
+            : conversation.otherParticipantName(currentUserId);
+        final otherId = isGroup
+            ? ''
+            : conversation.otherParticipantId(currentUserId);
         final unreadCount = conversation.unreadCountFor(currentUserId);
         final isLastFromMe = conversation.lastMessageSenderId == currentUserId;
 
-        // Watch live presence of other user
-        final otherUserPresence = ref
-            .watch(userPresenceProvider(otherId))
-            .asData
-            ?.value;
-        final isOnline = otherUserPresence?.isOnline ?? false;
+        // Watch live presence of other user (only for direct 1-to-1 chats)
+        final otherUserPresence = isGroup
+            ? null
+            : ref.watch(userPresenceProvider(otherId)).asData?.value;
+        final currentUserProfile =
+            ref.watch(currentUserProfileProvider).asData?.value;
+        final isBlockedByMe = !isGroup &&
+            (currentUserProfile?.isUserBlocked(otherId) ?? false);
 
-        final initials = otherName.isNotEmpty
-            ? (otherName.length >= 2
-                  ? otherName.substring(0, 2).toUpperCase()
-                  : otherName[0].toUpperCase())
-            : 'CO';
+        final canSeePhoto = isGroup ||
+            (otherUserPresence != null &&
+                PrivacyHelper.canViewPhoto(
+                  targetUser: otherUserPresence,
+                  viewerUserId: currentUserId,
+                  hasConversation: true,
+                ));
+        final canSeeOnline = !isGroup &&
+            otherUserPresence != null &&
+            !isBlockedByMe &&
+            PrivacyHelper.canViewOnline(
+              targetUser: otherUserPresence,
+              viewerUserId: currentUserId,
+              hasConversation: true,
+            );
+        final isOnline = canSeeOnline && otherUserPresence.isOnline;
+
+        final initials = displayName.isNotEmpty
+            ? (displayName.length >= 2
+                  ? displayName.substring(0, 2).toUpperCase()
+                  : displayName[0].toUpperCase())
+            : (isGroup ? 'GP' : 'CO');
+
+        final photoUrl = isGroup
+            ? conversation.photoUrl
+            : (canSeePhoto ? otherUserPresence?.photoUrl : null);
 
         return ListTile(
           contentPadding: const EdgeInsets.symmetric(
@@ -387,8 +631,17 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
             vertical: 4,
           ),
           onTap: () => _openConversation(conversation, currentUserId),
+          onLongPress: () => _showConversationOptions(
+            context,
+            conversation,
+            isPinned,
+            isArchived,
+            isMuted,
+            currentUserId,
+          ),
           leading: ConvoAvatar(
             initials: initials,
+            photoUrl: photoUrl,
             size: 52,
             status: isOnline
                 ? ConvoAvatarStatus.online
@@ -401,7 +654,7 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
                   children: [
                     Flexible(
                       child: Text(
-                        otherName,
+                        displayName,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: AppTypography.titleMedium.copyWith(
@@ -412,6 +665,46 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
                         ),
                       ),
                     ),
+                    if (isPinned) ...[
+                      const SizedBox(width: 4),
+                      Icon(
+                        Icons.push_pin_rounded,
+                        size: 14,
+                        color: context.colorScheme.primary,
+                      ),
+                    ],
+                    if (isMuted) ...[
+                      const SizedBox(width: 4),
+                      Icon(
+                        Icons.notifications_off_rounded,
+                        size: 14,
+                        color: context.convoColors.textTertiary,
+                      ),
+                    ],
+                    if (isGroup) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 5,
+                          vertical: 1,
+                        ),
+                        decoration: BoxDecoration(
+                          color: context.colorScheme.primary.withValues(
+                            alpha: 0.12,
+                          ),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          'GROUP',
+                          style: TextStyle(
+                            color: context.colorScheme.primary,
+                            fontSize: 9,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ),
+                    ],
                     if (conversation.hasMood &&
                         conversation.moodEmoji != null) ...[
                       const SizedBox(width: 4),

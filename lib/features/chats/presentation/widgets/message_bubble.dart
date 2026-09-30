@@ -9,6 +9,7 @@ import '../../../../core/theme/app_spacing.dart';
 import '../../../../core/theme/app_typography.dart';
 import '../../../../core/utils/date_formatter.dart';
 import '../../../../core/utils/extensions.dart';
+import '../../../../core/widgets/convo_avatar.dart';
 import '../../../capsules/presentation/widgets/capsule_card_widget.dart';
 import '../../../games/presentation/widgets/game_card_widget.dart';
 import '../../../reactions/presentation/widgets/animated_reaction_pill.dart';
@@ -25,6 +26,17 @@ class MessageBubble extends StatelessWidget {
     required this.onReply,
     required this.onReact,
     required this.onDelete,
+    this.onDeleteForMe,
+    this.onDeleteForEveryone,
+    this.onForward,
+    this.onToggleStar,
+    this.isStarred = false,
+    this.isSelected = false,
+    this.isSelectionMode = false,
+    this.onToggleSelect,
+    this.onSelectMessage,
+    this.onReplyTap,
+    this.showSenderName = false,
   });
 
   final MessageModel message;
@@ -33,6 +45,17 @@ class MessageBubble extends StatelessWidget {
   final VoidCallback onReply;
   final ValueChanged<String> onReact;
   final VoidCallback onDelete;
+  final VoidCallback? onDeleteForMe;
+  final VoidCallback? onDeleteForEveryone;
+  final VoidCallback? onForward;
+  final VoidCallback? onToggleStar;
+  final bool isStarred;
+  final bool isSelected;
+  final bool isSelectionMode;
+  final VoidCallback? onToggleSelect;
+  final VoidCallback? onSelectMessage;
+  final ValueChanged<String>? onReplyTap;
+  final bool showSenderName;
 
   static const List<String> availableReactions = [
     '❤️',
@@ -45,6 +68,10 @@ class MessageBubble extends StatelessWidget {
   ];
 
   void _showActionMenu(BuildContext context) {
+    if (isSelectionMode) {
+      onToggleSelect?.call();
+      return;
+    }
     HapticFeedback.mediumImpact();
     showModalBottomSheet(
       context: context,
@@ -52,6 +79,7 @@ class MessageBubble extends StatelessWidget {
       builder: (sheetContext) => _MessageActionSheet(
         message: message,
         isMe: isMe,
+        isStarred: isStarred,
         onReply: () {
           Navigator.of(sheetContext).pop();
           onReply();
@@ -60,16 +88,125 @@ class MessageBubble extends StatelessWidget {
           Navigator.of(sheetContext).pop();
           onReact(emoji);
         },
+        onToggleStar: onToggleStar != null
+            ? () {
+                Navigator.of(sheetContext).pop();
+                onToggleStar!();
+              }
+            : null,
+        onSelectMessage: onSelectMessage != null
+            ? () {
+                Navigator.of(sheetContext).pop();
+                onSelectMessage!();
+              }
+            : null,
         onDelete: () {
           Navigator.of(sheetContext).pop();
-          onDelete();
+          _showDeleteDialog(context);
         },
+        onForward: onForward != null
+            ? () {
+                Navigator.of(sheetContext).pop();
+                onForward!();
+              }
+            : null,
+      ),
+    );
+  }
+
+  void _showDeleteDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: context.convoColors.cardBackground,
+        shape: RoundedRectangleBorder(borderRadius: AppRadius.borderXl),
+        title: Text(
+          'Delete Message?',
+          style: AppTypography.titleLarge.copyWith(
+            color: context.convoColors.textPrimary,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        content: Text(
+          isMe
+              ? 'Choose whether to delete this message only for yourself or for everyone in this chat.'
+              : 'This message will be removed from your chat on this device.',
+          style: AppTypography.bodyMedium.copyWith(
+            color: context.convoColors.textSecondary,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(dialogCtx).pop();
+              if (onDeleteForMe != null) {
+                onDeleteForMe!();
+              } else {
+                onDelete();
+              }
+            },
+            child: const Text('Delete for me'),
+          ),
+          if (isMe)
+            FilledButton(
+              onPressed: () {
+                Navigator.of(dialogCtx).pop();
+                if (onDeleteForEveryone != null) {
+                  onDeleteForEveryone!();
+                } else {
+                  onDelete();
+                }
+              },
+              style: FilledButton.styleFrom(
+                backgroundColor: AppColors.error,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Delete for everyone'),
+            ),
+        ],
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    // System message representation (e.g. member added/removed, group created, left)
+    if (message.type == 'system') {
+      return Center(
+        child: Container(
+          margin: const EdgeInsets.symmetric(
+            vertical: 6,
+            horizontal: AppSpacing.lg,
+          ),
+          padding: const EdgeInsets.symmetric(
+            horizontal: 14,
+            vertical: 5,
+          ),
+          decoration: BoxDecoration(
+            color: context.convoColors.surfaceSubtle,
+            borderRadius: AppRadius.borderPill,
+            border: Border.all(
+              color: context.convoColors.cardBorder,
+              width: 0.8,
+            ),
+          ),
+          child: Text(
+            message.text,
+            textAlign: TextAlign.center,
+            style: AppTypography.labelSmall.copyWith(
+              color: context.convoColors.textSecondary,
+              fontSize: 11,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+      );
+    }
+
     final bubbleColor = isMe
         ? context.colorScheme.primary
         : context.convoColors.cardBackground;
@@ -78,55 +215,122 @@ class MessageBubble extends StatelessWidget {
         ? Colors.white.withValues(alpha: 0.75)
         : context.convoColors.textTertiary;
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.md,
-        vertical: 3,
-      ),
-      child: Column(
-        crossAxisAlignment: isMe
-            ? CrossAxisAlignment.end
-            : CrossAxisAlignment.start,
-        children: [
-          GestureDetector(
-            onLongPress: () => _showActionMenu(context),
-            child: Container(
-              constraints: BoxConstraints(
-                maxWidth: MediaQuery.of(context).size.width * 0.78,
+    final bubbleWidget = GestureDetector(
+      onTap: isSelectionMode ? onToggleSelect : null,
+      onLongPress: () => _showActionMenu(context),
+      child: Container(
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.78,
+        ),
+        padding: EdgeInsets.symmetric(
+          horizontal: message.isMedia ? 4 : AppSpacing.md,
+          vertical: message.isMedia ? 4 : AppSpacing.sm,
+        ),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? bubbleColor.withValues(alpha: 0.85)
+              : bubbleColor,
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(16),
+            topRight: const Radius.circular(16),
+            bottomLeft: Radius.circular(isMe ? 16 : 4),
+            bottomRight: Radius.circular(isMe ? 4 : 16),
+          ),
+          border: isSelected
+              ? Border.all(color: Colors.amber, width: 2)
+              : (isMe
+                  ? null
+                  : Border.all(
+                      color: context.convoColors.cardBorder,
+                      width: 1,
+                    )),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(
+                alpha: context.isDark ? 0.2 : 0.04,
               ),
-              padding: EdgeInsets.symmetric(
-                horizontal: message.isMedia ? 4 : AppSpacing.md,
-                vertical: message.isMedia ? 4 : AppSpacing.sm,
-              ),
-              decoration: BoxDecoration(
-                color: bubbleColor,
-                borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(16),
-                  topRight: const Radius.circular(16),
-                  bottomLeft: Radius.circular(isMe ? 16 : 4),
-                  bottomRight: Radius.circular(isMe ? 4 : 16),
+              blurRadius: 4,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: isMe
+              ? CrossAxisAlignment.end
+              : CrossAxisAlignment.start,
+          children: [
+            // Forwarded Indicator
+            if (message.isForwarded && !message.isDeleted) ...[
+              Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: message.isMedia ? 8 : 2,
+                  vertical: 2,
                 ),
-                border: isMe
-                    ? null
-                    : Border.all(
-                        color: context.convoColors.cardBorder,
-                        width: 1,
-                      ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(
-                      alpha: context.isDark ? 0.2 : 0.04,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.forward_rounded,
+                      size: 13,
+                      color: isMe ? Colors.white70 : context.convoColors.textTertiary,
                     ),
-                    blurRadius: 4,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
+                    const SizedBox(width: 4),
+                    Text(
+                      message.forwardedFrom != null && message.forwardedFrom!.isNotEmpty
+                          ? 'Forwarded from ${message.forwardedFrom}'
+                          : 'Forwarded',
+                      style: AppTypography.labelSmall.copyWith(
+                        color: isMe ? Colors.white70 : context.convoColors.textTertiary,
+                        fontStyle: FontStyle.italic,
+                        fontSize: 10,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              child: Column(
-                crossAxisAlignment: isMe
-                    ? CrossAxisAlignment.end
-                    : CrossAxisAlignment.start,
-                children: [
+            ],
+
+            // Group Chat Sender Name & Avatar
+            if (showSenderName &&
+                !isMe &&
+                message.senderName != null &&
+                message.senderName!.isNotEmpty) ...[
+              Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: message.isMedia ? 8 : 2,
+                  vertical: 2,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (message.senderPhotoUrl != null &&
+                        message.senderPhotoUrl!.isNotEmpty) ...[
+                      ConvoAvatar(
+                        initials: message.senderName!.isNotEmpty
+                            ? (message.senderName!.length >= 2
+                                ? message.senderName!
+                                    .substring(0, 2)
+                                    .toUpperCase()
+                                : message.senderName![0].toUpperCase())
+                            : 'CO',
+                        photoUrl: message.senderPhotoUrl,
+                        size: 16,
+                      ),
+                      const SizedBox(width: 5),
+                    ],
+                    Text(
+                      message.senderName!,
+                      style: AppTypography.labelSmall.copyWith(
+                        color: context.colorScheme.primary,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+
                   // Replying Quote Preview
                   if (message.isReply && !message.isDeleted) ...[
                     Padding(
@@ -244,6 +448,14 @@ class MessageBubble extends StatelessWidget {
                             fontSize: 10,
                           ),
                         ),
+                        if (isStarred) ...[
+                          const SizedBox(width: 3),
+                          const Icon(
+                            Icons.star_rounded,
+                            size: 13,
+                            color: Colors.amber,
+                          ),
+                        ],
                         if (isMe && !message.isDeleted) ...[
                           const SizedBox(width: 4),
                           Icon(
@@ -264,15 +476,63 @@ class MessageBubble extends StatelessWidget {
                 ],
               ),
             ),
-          ),
+          );
 
-          // Reactions Row attached below bubble
-          if (message.reactions.isNotEmpty && !message.isDeleted) ...[
-            const SizedBox(height: 2),
-            _buildReactionsRow(context),
-          ],
+    final fullMessage = Column(
+      crossAxisAlignment:
+          isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+      children: [
+        bubbleWidget,
+        if (message.reactions.isNotEmpty && !message.isDeleted) ...[
+          const SizedBox(height: 2),
+          _buildReactionsRow(context),
         ],
+      ],
+    );
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: 3,
       ),
+      child: isSelectionMode
+          ? InkWell(
+              onTap: onToggleSelect,
+              borderRadius: BorderRadius.circular(16),
+              child: Row(
+                mainAxisAlignment:
+                    isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  if (!isMe) ...[
+                    Icon(
+                      isSelected
+                          ? Icons.check_circle_rounded
+                          : Icons.radio_button_unchecked_rounded,
+                      color: isSelected
+                          ? context.colorScheme.primary
+                          : context.convoColors.textTertiary,
+                      size: 22,
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                  ],
+                  Flexible(child: fullMessage),
+                  if (isMe) ...[
+                    const SizedBox(width: AppSpacing.sm),
+                    Icon(
+                      isSelected
+                          ? Icons.check_circle_rounded
+                          : Icons.radio_button_unchecked_rounded,
+                      color: isSelected
+                          ? context.colorScheme.primary
+                          : context.convoColors.textTertiary,
+                      size: 22,
+                    ),
+                  ],
+                ],
+              ),
+            )
+          : fullMessage,
     );
   }
 
@@ -390,7 +650,7 @@ class MessageBubble extends StatelessWidget {
         : context.convoColors.surfaceSubtle;
     final accentLineColor = isMe ? Colors.white : context.colorScheme.primary;
 
-    return Container(
+    final previewWidget = Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: quoteBg,
@@ -423,6 +683,16 @@ class MessageBubble extends StatelessWidget {
         ],
       ),
     );
+
+    if (onReplyTap != null && message.replyToMessageId != null) {
+      return InkWell(
+        onTap: () => onReplyTap!(message.replyToMessageId!),
+        borderRadius: AppRadius.borderSm,
+        child: previewWidget,
+      );
+    }
+
+    return previewWidget;
   }
 
   Widget _buildReactionsRow(BuildContext context) {
@@ -531,6 +801,10 @@ class _MessageActionSheet extends StatelessWidget {
     required this.onReply,
     required this.onReact,
     required this.onDelete,
+    this.isStarred = false,
+    this.onToggleStar,
+    this.onSelectMessage,
+    this.onForward,
   });
 
   final MessageModel message;
@@ -538,6 +812,10 @@ class _MessageActionSheet extends StatelessWidget {
   final VoidCallback onReply;
   final ValueChanged<String> onReact;
   final VoidCallback onDelete;
+  final bool isStarred;
+  final VoidCallback? onToggleStar;
+  final VoidCallback? onSelectMessage;
+  final VoidCallback? onForward;
 
   @override
   Widget build(BuildContext context) {
@@ -606,6 +884,21 @@ class _MessageActionSheet extends StatelessWidget {
                 title: const Text('Reply'),
                 onTap: onReply,
               ),
+              if (onForward != null)
+                ListTile(
+                  leading: const Icon(Icons.forward_rounded),
+                  title: const Text('Forward'),
+                  onTap: onForward,
+                ),
+              if (onToggleStar != null)
+                ListTile(
+                  leading: Icon(
+                    isStarred ? Icons.star_rounded : Icons.star_border_rounded,
+                    color: isStarred ? Colors.amber : null,
+                  ),
+                  title: Text(isStarred ? 'Unstar Message' : 'Star Message'),
+                  onTap: onToggleStar,
+                ),
               if (message.text.isNotEmpty && !message.isMedia)
                 ListTile(
                   leading: const Icon(Icons.copy_rounded),
@@ -637,10 +930,16 @@ class _MessageActionSheet extends StatelessWidget {
                   },
                 ),
               ],
+              if (onSelectMessage != null)
+                ListTile(
+                  leading: const Icon(Icons.check_circle_outline_rounded),
+                  title: const Text('Select Message'),
+                  onTap: onSelectMessage,
+                ),
             ],
 
-            // Delete action if sender
-            if (isMe && !message.isDeleted)
+            // Delete action
+            if (!message.isDeleted)
               ListTile(
                 leading: const Icon(
                   Icons.delete_outline,

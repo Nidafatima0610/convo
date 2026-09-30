@@ -120,4 +120,29 @@ class DateFormatter {
     final monthName = _fullMonths[local.month - 1];
     return '$weekdayName, $monthName ${local.day}${now.year != local.year ? ', ${local.year}' : ''}';
   }
+
+  /// Format relative timestamp for last seen:
+  /// - "just now"
+  /// - "5m ago"
+  /// - "2h ago"
+  /// - "yesterday at 10:30 AM"
+  /// - "3d ago"
+  static String formatTimeAgo(DateTime dateTime) {
+    final now = DateTime.now();
+    final difference = now.difference(dateTime.toLocal());
+
+    if (difference.inSeconds < 60) {
+      return 'just now';
+    } else if (difference.inMinutes < 60) {
+      return '${difference.inMinutes}m ago';
+    } else if (difference.inHours < 24) {
+      return '${difference.inHours}h ago';
+    } else if (difference.inDays == 1) {
+      return 'yesterday at ${formatTime(dateTime)}';
+    } else if (difference.inDays < 7) {
+      return '${difference.inDays}d ago';
+    } else {
+      return formatConversationTime(dateTime);
+    }
+  }
 }

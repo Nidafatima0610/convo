@@ -23,4 +23,7 @@ class AppRoutes {
   // Chat Magic routes
   static const String stickerStudio = '/stickers/studio';
   static const String capsules = '/capsules';
+  static const String createGroup = '/create-group';
+  static const String starredMessages = '/starred-messages';
+  static const String archivedChats = '/chats/archived';
 }

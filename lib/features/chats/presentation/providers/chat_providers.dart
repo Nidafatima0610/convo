@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../services/audio/audio_service.dart';
 import '../../../../services/firebase/chat_service.dart';
 import '../../../../services/firebase/media_service.dart';
+import '../../../../services/local_storage/chat_preferences_service.dart';
 import '../../../../services/notifications/notification_service.dart';
 import '../../../auth/domain/models/convo_user.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
@@ -61,6 +62,13 @@ final userConversationsProvider = StreamProvider<List<ConversationModel>>((
   final chatService = ref.watch(chatServiceProvider);
   return chatService.conversationsStream(authUser.uid);
 });
+
+/// Real-time stream of a specific conversation's document (for group metadata updates)
+final singleConversationProvider =
+    StreamProvider.family<ConversationModel?, String>((ref, conversationId) {
+      final chatService = ref.watch(chatServiceProvider);
+      return chatService.conversationStream(conversationId);
+    });
 
 const int kMessagesPageSize = 25;
 const int kConversationsPageSize = 30;
@@ -179,11 +187,18 @@ class ConversationPaginatedMessagesNotifier
       }
     }
 
-    // 4. Exclude expired secret messages
+    // 4. Exclude expired secret messages and messages deleted for this user
+    final currentUserId =
+        ref.read(authStateChangesProvider).asData?.value?.uid ?? '';
+    final prefsService = ref.read(chatPreferencesServiceProvider);
     final now = DateTime.now();
     final list = messageMap.values.where((m) {
       if (m.isSecret && m.expiresAt != null) {
-        return now.isBefore(m.expiresAt!);
+        if (!now.isBefore(m.expiresAt!)) return false;
+      }
+      if (currentUserId.isNotEmpty) {
+        if (m.deletedFor.contains(currentUserId)) return false;
+        if (prefsService.isMessageDeletedForMe(m.id)) return false;
       }
       return true;
     }).toList();
@@ -333,7 +348,23 @@ class ConversationPaginatedMessagesNotifier
 
     state = state.copyWith(messages: updatedAll);
   }
+
+  void markMessageDeletedForMe(String messageId) {
+    _olderMessages.removeWhere((m) => m.id == messageId);
+    final updatedAll = state.messages.where((m) => m.id != messageId).toList();
+    state = state.copyWith(messages: updatedAll);
+  }
 }
+
+/// Live list of users typing in a conversation (excluding current user)
+final conversationTypingUsersProvider =
+    Provider.family<List<String>, String>((ref, conversationId) {
+  final currentUserId =
+      ref.watch(authStateChangesProvider).asData?.value?.uid ?? '';
+  final conv = ref.watch(singleConversationProvider(conversationId)).asData?.value;
+  if (conv == null) return const [];
+  return conv.typingUsers(currentUserId);
+});
 
 /// Real-time stream of messages inside a conversation, seamlessly combining Firestore messages
 /// with local Smart Offline Queued / Nearby direct messages.
@@ -410,13 +441,35 @@ class ChatController extends Notifier<AsyncValue<void>> {
     String? replyToMessageId,
     String? replyToSnippet,
     String? replyToSenderName,
+    String? senderName,
+    String? senderPhotoUrl,
+    List<String>? recipientIds,
     Map<String, dynamic>? metadata,
     DateTime? expiresAt,
     bool isSecret = false,
     bool forceOfflineNearby = false,
+    bool isForwarded = false,
+    String? forwardedFrom,
   }) async {
     final currentUser = ref.read(authStateChangesProvider).asData?.value;
     if (currentUser == null || text.trim().isEmpty) return false;
+
+    final currentProfile = ref.read(currentUserProfileProvider).asData?.value;
+    final effectiveSenderName =
+        senderName ?? currentProfile?.name ?? currentUser.displayName ?? 'CONVO User';
+    final effectiveSenderPhotoUrl = senderPhotoUrl ?? currentProfile?.photoUrl;
+
+    // Check if recipient is blocked (only for 1-to-1)
+    if (receiverId != 'group' &&
+        receiverId.isNotEmpty &&
+        currentProfile != null &&
+        currentProfile.isUserBlocked(receiverId)) {
+      state = AsyncValue.error(
+        'Cannot send message to a blocked contact.',
+        StackTrace.current,
+      );
+      return false;
+    }
 
     state = const AsyncValue.loading();
     try {
@@ -439,31 +492,58 @@ class ChatController extends Notifier<AsyncValue<void>> {
       }
 
       // Try standard Firebase messaging transport
-      try {
+      if (receiverId == 'group') {
         final chatService = ref.read(chatServiceProvider);
         await chatService.sendMessage(
           conversationId: conversationId,
           senderId: currentUser.uid,
-          receiverId: receiverId,
+          receiverId: 'group',
           text: text,
           type: type,
           replyToMessageId: replyToMessageId,
           replyToSnippet: replyToSnippet,
           replyToSenderName: replyToSenderName,
+          senderName: effectiveSenderName,
+          senderPhotoUrl: effectiveSenderPhotoUrl,
+          recipientIds: recipientIds,
           metadata: metadata,
           expiresAt: expiresAt,
           isSecret: isSecret,
+          isForwarded: isForwarded,
+          forwardedFrom: forwardedFrom,
         );
-      } catch (networkError) {
-        // Network unavailable or Firebase write failed: fallback to Smart Offline Queue!
-        final offlineSync = ref.read(offlineSyncServiceProvider);
-        await offlineSync.sendOrQueueMessage(
-          conversationId: conversationId,
-          senderId: currentUser.uid,
-          receiverId: receiverId,
-          text: text,
-          type: type,
-        );
+      } else {
+        try {
+          final chatService = ref.read(chatServiceProvider);
+          await chatService.sendMessage(
+            conversationId: conversationId,
+            senderId: currentUser.uid,
+            receiverId: receiverId,
+            text: text,
+            type: type,
+            replyToMessageId: replyToMessageId,
+            replyToSnippet: replyToSnippet,
+            replyToSenderName: replyToSenderName,
+            senderName: effectiveSenderName,
+            senderPhotoUrl: effectiveSenderPhotoUrl,
+            recipientIds: recipientIds,
+            metadata: metadata,
+            expiresAt: expiresAt,
+            isSecret: isSecret,
+            isForwarded: isForwarded,
+            forwardedFrom: forwardedFrom,
+          );
+        } catch (networkError) {
+          // Network unavailable or direct Firebase write failed: fallback to Smart Offline Queue for 1-to-1
+          final offlineSync = ref.read(offlineSyncServiceProvider);
+          await offlineSync.sendOrQueueMessage(
+            conversationId: conversationId,
+            senderId: currentUser.uid,
+            receiverId: receiverId,
+            text: text,
+            type: type,
+          );
+        }
       }
 
       ref.read(replyingMessageProvider.notifier).clear();
@@ -488,12 +568,34 @@ class ChatController extends Notifier<AsyncValue<void>> {
     String? replyToMessageId,
     String? replyToSnippet,
     String? replyToSenderName,
+    String? senderName,
+    String? senderPhotoUrl,
+    List<String>? recipientIds,
     Map<String, dynamic>? metadata,
     DateTime? expiresAt,
     bool isSecret = false,
+    bool isForwarded = false,
+    String? forwardedFrom,
   }) async {
     final currentUser = ref.read(authStateChangesProvider).asData?.value;
     if (currentUser == null) return false;
+
+    final currentProfile = ref.read(currentUserProfileProvider).asData?.value;
+    final effectiveSenderName =
+        senderName ?? currentProfile?.name ?? currentUser.displayName ?? 'CONVO User';
+    final effectiveSenderPhotoUrl = senderPhotoUrl ?? currentProfile?.photoUrl;
+
+    // Check if recipient is blocked (only for 1-to-1)
+    if (receiverId != 'group' &&
+        receiverId.isNotEmpty &&
+        currentProfile != null &&
+        currentProfile.isUserBlocked(receiverId)) {
+      state = AsyncValue.error(
+        'Cannot send message to a blocked contact.',
+        StackTrace.current,
+      );
+      return false;
+    }
 
     state = const AsyncValue.loading();
     try {
@@ -512,9 +614,14 @@ class ChatController extends Notifier<AsyncValue<void>> {
         replyToMessageId: replyToMessageId,
         replyToSnippet: replyToSnippet,
         replyToSenderName: replyToSenderName,
+        senderName: effectiveSenderName,
+        senderPhotoUrl: effectiveSenderPhotoUrl,
+        recipientIds: recipientIds,
         metadata: metadata,
         expiresAt: expiresAt,
         isSecret: isSecret,
+        isForwarded: isForwarded,
+        forwardedFrom: forwardedFrom,
       );
 
       ref.read(replyingMessageProvider.notifier).clear();
@@ -524,6 +631,239 @@ class ChatController extends Notifier<AsyncValue<void>> {
       state = AsyncValue.error(e.toString(), st);
       return false;
     }
+  }
+
+  /// Creates a new group conversation
+  Future<ConversationModel?> createGroup({
+    required String name,
+    List<ConvoUser>? initialMembers,
+    List<ConvoUser>? members,
+    String? photoUrl,
+    String? description,
+  }) async {
+    final memberList = initialMembers ?? members ?? [];
+    final authUser = ref.read(authStateChangesProvider).asData?.value;
+    if (authUser == null) return null;
+    final profile = ref.read(currentUserProfileProvider).asData?.value;
+    final creator =
+        profile ??
+        ConvoUser(
+          uid: authUser.uid,
+          name: authUser.displayName ?? 'CONVO User',
+          email: authUser.email ?? '',
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        );
+
+    state = const AsyncValue.loading();
+    try {
+      final chatService = ref.read(chatServiceProvider);
+      final group = await chatService.createGroupConversation(
+        name: name,
+        creator: creator,
+        initialMembers: memberList,
+        photoUrl: photoUrl,
+        description: description,
+      );
+      state = const AsyncValue.data(null);
+      return group;
+    } catch (e, st) {
+      state = AsyncValue.error(e.toString(), st);
+      return null;
+    }
+  }
+
+  /// Updates group metadata - Admin only
+  Future<bool> updateGroupInfo({
+    required String conversationId,
+    String? name,
+    String? description,
+    String? photoUrl,
+    bool removePhoto = false,
+  }) async {
+    final currentUserId = ref.read(authStateChangesProvider).asData?.value?.uid;
+    if (currentUserId == null) return false;
+
+    state = const AsyncValue.loading();
+    try {
+      final chatService = ref.read(chatServiceProvider);
+      await chatService.updateGroupInfo(
+        conversationId: conversationId,
+        updaterId: currentUserId,
+        name: name,
+        description: description,
+        photoUrl: photoUrl,
+        removePhoto: removePhoto,
+      );
+      state = const AsyncValue.data(null);
+      return true;
+    } catch (e, st) {
+      state = AsyncValue.error(e.toString(), st);
+      return false;
+    }
+  }
+
+  /// Adds members to group - Admin only
+  Future<bool> addGroupMembers({
+    required String conversationId,
+    required List<ConvoUser> newMembers,
+  }) async {
+    final authUser = ref.read(authStateChangesProvider).asData?.value;
+    if (authUser == null) return false;
+    final profile = ref.read(currentUserProfileProvider).asData?.value;
+    final admin =
+        profile ??
+        ConvoUser(
+          uid: authUser.uid,
+          name: authUser.displayName ?? 'Admin',
+          email: authUser.email ?? '',
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        );
+
+    state = const AsyncValue.loading();
+    try {
+      final chatService = ref.read(chatServiceProvider);
+      await chatService.addGroupMembers(
+        conversationId: conversationId,
+        admin: admin,
+        newMembers: newMembers,
+      );
+      state = const AsyncValue.data(null);
+      return true;
+    } catch (e, st) {
+      state = AsyncValue.error(e.toString(), st);
+      return false;
+    }
+  }
+
+  /// Removes a member from group - Admin only
+  Future<bool> removeGroupMember({
+    required String conversationId,
+    required String memberId,
+    required String memberName,
+  }) async {
+    final authUser = ref.read(authStateChangesProvider).asData?.value;
+    if (authUser == null) return false;
+    final profile = ref.read(currentUserProfileProvider).asData?.value;
+    final admin =
+        profile ??
+        ConvoUser(
+          uid: authUser.uid,
+          name: authUser.displayName ?? 'Admin',
+          email: authUser.email ?? '',
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        );
+
+    state = const AsyncValue.loading();
+    try {
+      final chatService = ref.read(chatServiceProvider);
+      await chatService.removeGroupMember(
+        conversationId: conversationId,
+        admin: admin,
+        memberId: memberId,
+        memberName: memberName,
+      );
+      state = const AsyncValue.data(null);
+      return true;
+    } catch (e, st) {
+      state = AsyncValue.error(e.toString(), st);
+      return false;
+    }
+  }
+
+  /// Promotes a member to Admin
+  Future<bool> promoteToAdmin({
+    required String conversationId,
+    required String memberId,
+  }) async {
+    final currentUserId = ref.read(authStateChangesProvider).asData?.value?.uid;
+    if (currentUserId == null) return false;
+
+    state = const AsyncValue.loading();
+    try {
+      final chatService = ref.read(chatServiceProvider);
+      await chatService.promoteToAdmin(
+        conversationId: conversationId,
+        adminId: currentUserId,
+        memberId: memberId,
+      );
+      state = const AsyncValue.data(null);
+      return true;
+    } catch (e, st) {
+      state = AsyncValue.error(e.toString(), st);
+      return false;
+    }
+  }
+
+  /// Demotes an Admin to regular member
+  Future<bool> demoteAdmin({
+    required String conversationId,
+    String? memberId,
+    String? targetAdminId,
+  }) async {
+    final targetId = memberId ?? targetAdminId;
+    if (targetId == null) return false;
+    final currentUserId = ref.read(authStateChangesProvider).asData?.value?.uid;
+    if (currentUserId == null) return false;
+
+    state = const AsyncValue.loading();
+    try {
+      final chatService = ref.read(chatServiceProvider);
+      await chatService.demoteAdmin(
+        conversationId: conversationId,
+        currentAdminId: currentUserId,
+        targetAdminId: targetId,
+      );
+      state = const AsyncValue.data(null);
+      return true;
+    } catch (e, st) {
+      state = AsyncValue.error(e.toString(), st);
+      return false;
+    }
+  }
+
+  /// Leaves group
+  Future<bool> leaveGroup({
+    required String conversationId,
+  }) async {
+    final authUser = ref.read(authStateChangesProvider).asData?.value;
+    if (authUser == null) return false;
+    final profile = ref.read(currentUserProfileProvider).asData?.value;
+    final userName = profile?.name ?? authUser.displayName ?? 'A member';
+
+    state = const AsyncValue.loading();
+    try {
+      final chatService = ref.read(chatServiceProvider);
+      await chatService.leaveGroup(
+        conversationId: conversationId,
+        userId: authUser.uid,
+        userName: userName,
+      );
+      state = const AsyncValue.data(null);
+      return true;
+    } catch (e, st) {
+      state = AsyncValue.error(e.toString(), st);
+      return false;
+    }
+  }
+
+  /// Toggles mute for a group
+  Future<void> toggleGroupMute({
+    required String conversationId,
+    required bool mute,
+  }) async {
+    final currentUserId = ref.read(authStateChangesProvider).asData?.value?.uid;
+    if (currentUserId == null) return;
+    try {
+      final chatService = ref.read(chatServiceProvider);
+      await chatService.toggleGroupMute(
+        conversationId: conversationId,
+        userId: currentUserId,
+        mute: mute,
+      );
+    } catch (_) {}
   }
 
   Future<void> submitGameAnswer({
@@ -584,6 +924,17 @@ class ChatController extends Notifier<AsyncValue<void>> {
     required String conversationId,
     required String messageId,
   }) async {
+    await deleteMessageForEveryone(
+      conversationId: conversationId,
+      messageId: messageId,
+    );
+  }
+
+  /// Deletes a message for everyone (only available if user is the sender).
+  Future<void> deleteMessageForEveryone({
+    required String conversationId,
+    required String messageId,
+  }) async {
     final currentUserId = ref.read(authStateChangesProvider).asData?.value?.uid;
     if (currentUserId == null) return;
 
@@ -603,6 +954,49 @@ class ChatController extends Notifier<AsyncValue<void>> {
     }
   }
 
+  /// Deletes a message only for the current user.
+  Future<void> deleteMessageForMe({
+    required String conversationId,
+    required String messageId,
+  }) async {
+    final currentUserId = ref.read(authStateChangesProvider).asData?.value?.uid;
+    if (currentUserId == null) return;
+
+    final prefsService = ref.read(chatPreferencesServiceProvider);
+    await prefsService.markMessageDeletedForMe(messageId);
+
+    ref
+        .read(conversationPaginatedMessagesProvider(conversationId).notifier)
+        .markMessageDeletedForMe(messageId);
+
+    try {
+      final chatService = ref.read(chatServiceProvider);
+      await chatService.deleteMessageForMe(
+        conversationId: conversationId,
+        messageId: messageId,
+        userId: currentUserId,
+      );
+    } catch (_) {
+      // Handled via local storage if Firestore write fails
+    }
+  }
+
+  /// Updates typing status with debouncing/throttling.
+  Future<void> setTypingStatus({
+    required String conversationId,
+    required bool isTyping,
+  }) async {
+    final currentUserId = ref.read(authStateChangesProvider).asData?.value?.uid;
+    if (currentUserId == null) return;
+
+    final chatService = ref.read(chatServiceProvider);
+    await chatService.setTypingStatus(
+      conversationId: conversationId,
+      userId: currentUserId,
+      isTyping: isTyping,
+    );
+  }
+
   Future<void> clearChat(String conversationId) async {
     try {
       final chatService = ref.read(chatServiceProvider);
@@ -614,3 +1008,4 @@ class ChatController extends Notifier<AsyncValue<void>> {
     }
   }
 }
+

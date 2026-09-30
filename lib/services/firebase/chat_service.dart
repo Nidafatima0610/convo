@@ -96,13 +96,16 @@ class ChatService {
       if (Firebase.apps.isEmpty) return const Stream.empty();
       return _conversationsRef
           .where('participants', arrayContains: currentUserId)
-          .orderBy('updatedAt', descending: true)
-          .limit(limit)
           .snapshots()
           .map((snapshot) {
-            return snapshot.docs
+            final list = snapshot.docs
                 .map((doc) => ConversationModel.fromFirestore(doc))
                 .toList();
+            list.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+            if (list.length > limit) {
+              return list.sublist(0, limit);
+            }
+            return list;
           });
     } catch (_) {
       return const Stream.empty();
@@ -257,9 +260,14 @@ class ChatService {
     String? replyToMessageId,
     String? replyToSnippet,
     String? replyToSenderName,
+    String? senderName,
+    String? senderPhotoUrl,
+    List<String>? recipientIds,
     Map<String, dynamic>? metadata,
     DateTime? expiresAt,
     bool isSecret = false,
+    bool isForwarded = false,
+    String? forwardedFrom,
   }) async {
     final messageDocRef = _conversationsRef
         .doc(conversationId)
@@ -279,11 +287,15 @@ class ChatService {
       replyToMessageId: replyToMessageId,
       replyToSnippet: replyToSnippet,
       replyToSenderName: replyToSenderName,
+      senderName: senderName,
+      senderPhotoUrl: senderPhotoUrl,
       reactions: {},
       isDeleted: false,
       metadata: metadata,
       expiresAt: expiresAt,
       isSecret: isSecret,
+      isForwarded: isForwarded,
+      forwardedFrom: forwardedFrom,
     );
 
     final batch = _firestore.batch();
@@ -296,13 +308,38 @@ class ChatService {
 
     // 2. Update conversation summary
     final conversationDocRef = _conversationsRef.doc(conversationId);
-    batch.update(conversationDocRef, {
+    final Map<String, dynamic> convUpdates = {
       'lastMessage': text.trim(),
       'lastMessageAt': FieldValue.serverTimestamp(),
       'lastMessageSenderId': senderId,
-      'unreadCounts.$receiverId': FieldValue.increment(1),
       'updatedAt': FieldValue.serverTimestamp(),
-    });
+      'typing.$senderId': FieldValue.delete(),
+    };
+
+    var effectiveRecipients = recipientIds;
+    if (receiverId == 'group' &&
+        (effectiveRecipients == null || effectiveRecipients.isEmpty)) {
+      final convDoc = await _conversationsRef.doc(conversationId).get();
+      if (convDoc.exists && convDoc.data() != null) {
+        final rawParts = convDoc.data()!['participants'];
+        if (rawParts is List) {
+          effectiveRecipients =
+              rawParts.map((e) => e.toString()).toList();
+        }
+      }
+    }
+
+    if (effectiveRecipients != null && effectiveRecipients.isNotEmpty) {
+      for (final recId in effectiveRecipients) {
+        if (recId != senderId && recId.isNotEmpty) {
+          convUpdates['unreadCounts.$recId'] = FieldValue.increment(1);
+        }
+      }
+    } else if (receiverId.isNotEmpty && receiverId != 'group') {
+      convUpdates['unreadCounts.$receiverId'] = FieldValue.increment(1);
+    }
+
+    batch.update(conversationDocRef, convUpdates);
 
     await batch.commit();
     return message;
@@ -323,9 +360,14 @@ class ChatService {
     String? replyToMessageId,
     String? replyToSnippet,
     String? replyToSenderName,
+    String? senderName,
+    String? senderPhotoUrl,
+    List<String>? recipientIds,
     Map<String, dynamic>? metadata,
     DateTime? expiresAt,
     bool isSecret = false,
+    bool isForwarded = false,
+    String? forwardedFrom,
   }) async {
     final messageDocRef = _conversationsRef
         .doc(conversationId)
@@ -351,11 +393,15 @@ class ChatService {
       replyToMessageId: replyToMessageId,
       replyToSnippet: replyToSnippet,
       replyToSenderName: replyToSenderName,
+      senderName: senderName,
+      senderPhotoUrl: senderPhotoUrl,
       reactions: {},
       isDeleted: false,
       metadata: metadata,
       expiresAt: expiresAt,
       isSecret: isSecret,
+      isForwarded: isForwarded,
+      forwardedFrom: forwardedFrom,
     );
 
     final batch = _firestore.batch();
@@ -386,13 +432,38 @@ class ChatService {
     }
 
     final conversationDocRef = _conversationsRef.doc(conversationId);
-    batch.update(conversationDocRef, {
+    final Map<String, dynamic> convUpdates = {
       'lastMessage': previewText,
       'lastMessageAt': FieldValue.serverTimestamp(),
       'lastMessageSenderId': senderId,
-      'unreadCounts.$receiverId': FieldValue.increment(1),
       'updatedAt': FieldValue.serverTimestamp(),
-    });
+      'typing.$senderId': FieldValue.delete(),
+    };
+
+    var effectiveRecipients = recipientIds;
+    if (receiverId == 'group' &&
+        (effectiveRecipients == null || effectiveRecipients.isEmpty)) {
+      final convDoc = await _conversationsRef.doc(conversationId).get();
+      if (convDoc.exists && convDoc.data() != null) {
+        final rawParts = convDoc.data()!['participants'];
+        if (rawParts is List) {
+          effectiveRecipients =
+              rawParts.map((e) => e.toString()).toList();
+        }
+      }
+    }
+
+    if (effectiveRecipients != null && effectiveRecipients.isNotEmpty) {
+      for (final recId in effectiveRecipients) {
+        if (recId != senderId && recId.isNotEmpty) {
+          convUpdates['unreadCounts.$recId'] = FieldValue.increment(1);
+        }
+      }
+    } else if (receiverId.isNotEmpty && receiverId != 'group') {
+      convUpdates['unreadCounts.$receiverId'] = FieldValue.increment(1);
+    }
+
+    batch.update(conversationDocRef, convUpdates);
 
     await batch.commit();
     return message;
@@ -520,6 +591,44 @@ class ChatService {
     }
   }
 
+  /// Deletes a message only for the current user.
+  Future<void> deleteMessageForMe({
+    required String conversationId,
+    required String messageId,
+    required String userId,
+  }) async {
+    final messageDocRef = _conversationsRef
+        .doc(conversationId)
+        .collection('messages')
+        .doc(messageId);
+
+    await messageDocRef.update({
+      'deletedFor': FieldValue.arrayUnion([userId]),
+    });
+  }
+
+  /// Updates typing status of a user in a conversation with debouncing and safe writes.
+  Future<void> setTypingStatus({
+    required String conversationId,
+    required String userId,
+    required bool isTyping,
+  }) async {
+    try {
+      final convRef = _conversationsRef.doc(conversationId);
+      if (isTyping) {
+        await convRef.update({
+          'typing.$userId': FieldValue.serverTimestamp(),
+        });
+      } else {
+        await convRef.update({
+          'typing.$userId': FieldValue.delete(),
+        });
+      }
+    } catch (_) {
+      // Non-critical typing indicator update failure
+    }
+  }
+
   /// Searches registered users excluding the current user.
   Future<List<ConvoUser>> searchUsers({
     required String query,
@@ -589,6 +698,360 @@ class ChatService {
         .doc(messageId);
 
     await messageDocRef.update({'metadata.game.answers.$userId': answer});
+  }
+
+  /// Gets a conversation by ID.
+  Future<ConversationModel?> getConversation(String conversationId) async {
+    try {
+      final doc = await _conversationsRef.doc(conversationId).get();
+      if (!doc.exists || doc.data() == null) return null;
+      return ConversationModel.fromFirestore(doc);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Real-time stream of a specific conversation's document metadata.
+  Stream<ConversationModel?> conversationStream(String conversationId) {
+    if (Firebase.apps.isEmpty) return const Stream.empty();
+    return _conversationsRef.doc(conversationId).snapshots().map((doc) {
+      if (!doc.exists || doc.data() == null) return null;
+      return ConversationModel.fromFirestore(doc);
+    });
+  }
+
+  /// Creates a new group conversation with creator as initial admin.
+  Future<ConversationModel> createGroupConversation({
+    required String name,
+    required ConvoUser creator,
+    required List<ConvoUser> initialMembers,
+    String? photoUrl,
+    String? description,
+  }) async {
+    final docRef = _conversationsRef.doc();
+    final allParticipants = <String>{
+      creator.uid,
+      ...initialMembers.map((m) => m.uid),
+    }.toList();
+
+    final participantDetails = <String, Map<String, dynamic>>{
+      creator.uid: {
+        'name': creator.name,
+        'email': creator.email,
+        'photoUrl': creator.photoUrl,
+      },
+    };
+    for (final member in initialMembers) {
+      participantDetails[member.uid] = {
+        'name': member.name,
+        'email': member.email,
+        'photoUrl': member.photoUrl,
+      };
+    }
+
+    final unreadCounts = <String, int>{};
+    for (final uid in allParticipants) {
+      unreadCounts[uid] = 0;
+    }
+
+    final initialMessage = '${creator.name} created group "$name"';
+    final now = DateTime.now();
+
+    final group = ConversationModel(
+      id: docRef.id,
+      participants: allParticipants,
+      participantDetails: participantDetails,
+      lastMessage: initialMessage,
+      lastMessageAt: now,
+      lastMessageSenderId: creator.uid,
+      unreadCounts: unreadCounts,
+      type: 'group',
+      name: name.trim(),
+      photoUrl: photoUrl,
+      description: description?.trim(),
+      createdBy: creator.uid,
+      admins: [creator.uid],
+      mutedBy: const [],
+      createdAt: now,
+      updatedAt: now,
+    );
+
+    await docRef.set({
+      ...group.toMap(),
+      'lastMessageAt': FieldValue.serverTimestamp(),
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    // Create system message announcing creation
+    final msgDocRef = docRef.collection('messages').doc();
+    final systemMessage = MessageModel(
+      id: msgDocRef.id,
+      conversationId: docRef.id,
+      senderId: creator.uid,
+      receiverId: 'group',
+      text: initialMessage,
+      type: 'system',
+      senderName: creator.name,
+      createdAt: now,
+    );
+    await msgDocRef.set({
+      ...systemMessage.toMap(),
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+
+    return group;
+  }
+
+  /// Updates group info (name, description, photoUrl) - Admin only.
+  Future<void> updateGroupInfo({
+    required String conversationId,
+    required String updaterId,
+    String? name,
+    String? description,
+    String? photoUrl,
+    bool removePhoto = false,
+  }) async {
+    final doc = await _conversationsRef.doc(conversationId).get();
+    if (!doc.exists) throw Exception('Group conversation not found');
+    final conv = ConversationModel.fromFirestore(doc);
+    if (!conv.isAdmin(updaterId)) {
+      throw Exception('Only group admins can update group information');
+    }
+
+    final updates = <String, dynamic>{
+      'updatedAt': FieldValue.serverTimestamp(),
+    };
+    if (name != null && name.trim().isNotEmpty) updates['name'] = name.trim();
+    if (description != null) updates['description'] = description.trim();
+    if (removePhoto) {
+      updates['photoUrl'] = FieldValue.delete();
+    } else if (photoUrl != null) {
+      updates['photoUrl'] = photoUrl;
+    }
+
+    await _conversationsRef.doc(conversationId).update(updates);
+  }
+
+  /// Adds members to a group - Admin only.
+  Future<void> addGroupMembers({
+    required String conversationId,
+    required ConvoUser admin,
+    required List<ConvoUser> newMembers,
+  }) async {
+    final doc = await _conversationsRef.doc(conversationId).get();
+    if (!doc.exists) throw Exception('Group conversation not found');
+    final conv = ConversationModel.fromFirestore(doc);
+    if (!conv.isAdmin(admin.uid)) {
+      throw Exception('Only group admins can add members');
+    }
+
+    final newUids = newMembers.map((m) => m.uid).toList();
+    final names = newMembers.map((m) => m.name).join(', ');
+    final updates = <String, dynamic>{
+      'participants': FieldValue.arrayUnion(newUids),
+      'lastMessage': '${admin.name} added $names',
+      'lastMessageAt': FieldValue.serverTimestamp(),
+      'lastMessageSenderId': admin.uid,
+      'updatedAt': FieldValue.serverTimestamp(),
+    };
+
+    for (final member in newMembers) {
+      updates['participantDetails.${member.uid}'] = {
+        'name': member.name,
+        'email': member.email,
+        'photoUrl': member.photoUrl,
+      };
+      updates['unreadCounts.${member.uid}'] = 0;
+    }
+
+    final batch = _firestore.batch();
+    batch.update(_conversationsRef.doc(conversationId), updates);
+
+    // Announce member addition
+    final msgDocRef =
+        _conversationsRef.doc(conversationId).collection('messages').doc();
+    final systemMsg = MessageModel(
+      id: msgDocRef.id,
+      conversationId: conversationId,
+      senderId: admin.uid,
+      receiverId: 'group',
+      text: '${admin.name} added $names',
+      type: 'system',
+      senderName: admin.name,
+      createdAt: DateTime.now(),
+    );
+    batch.set(msgDocRef, {
+      ...systemMsg.toMap(),
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+
+    await batch.commit();
+  }
+
+  /// Removes a member from a group - Admin only.
+  Future<void> removeGroupMember({
+    required String conversationId,
+    required ConvoUser admin,
+    required String memberId,
+    required String memberName,
+  }) async {
+    final doc = await _conversationsRef.doc(conversationId).get();
+    if (!doc.exists) throw Exception('Group conversation not found');
+    final conv = ConversationModel.fromFirestore(doc);
+    if (!conv.isAdmin(admin.uid)) {
+      throw Exception('Only group admins can remove members');
+    }
+    if (memberId == conv.createdBy && admin.uid != conv.createdBy) {
+      throw Exception('Cannot remove group creator');
+    }
+
+    final batch = _firestore.batch();
+    batch.update(_conversationsRef.doc(conversationId), {
+      'participants': FieldValue.arrayRemove([memberId]),
+      'admins': FieldValue.arrayRemove([memberId]),
+      'participantDetails.$memberId': FieldValue.delete(),
+      'unreadCounts.$memberId': FieldValue.delete(),
+      'lastMessage': '${admin.name} removed $memberName',
+      'lastMessageAt': FieldValue.serverTimestamp(),
+      'lastMessageSenderId': admin.uid,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    final msgDocRef =
+        _conversationsRef.doc(conversationId).collection('messages').doc();
+    final systemMsg = MessageModel(
+      id: msgDocRef.id,
+      conversationId: conversationId,
+      senderId: admin.uid,
+      receiverId: 'group',
+      text: '${admin.name} removed $memberName',
+      type: 'system',
+      senderName: admin.name,
+      createdAt: DateTime.now(),
+    );
+    batch.set(msgDocRef, {
+      ...systemMsg.toMap(),
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+
+    await batch.commit();
+  }
+
+  /// Promotes a member to Admin.
+  Future<void> promoteToAdmin({
+    required String conversationId,
+    required String adminId,
+    required String memberId,
+  }) async {
+    final doc = await _conversationsRef.doc(conversationId).get();
+    if (!doc.exists) throw Exception('Group conversation not found');
+    final conv = ConversationModel.fromFirestore(doc);
+    if (!conv.isAdmin(adminId)) {
+      throw Exception('Only admins can promote members to admin');
+    }
+
+    await _conversationsRef.doc(conversationId).update({
+      'admins': FieldValue.arrayUnion([memberId]),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Demotes an Admin to regular member.
+  Future<void> demoteAdmin({
+    required String conversationId,
+    required String currentAdminId,
+    required String targetAdminId,
+  }) async {
+    final doc = await _conversationsRef.doc(conversationId).get();
+    if (!doc.exists) throw Exception('Group conversation not found');
+    final conv = ConversationModel.fromFirestore(doc);
+    if (!conv.isAdmin(currentAdminId)) {
+      throw Exception('Only admins can manage roles');
+    }
+    if (targetAdminId == conv.createdBy) {
+      throw Exception('Cannot demote group creator');
+    }
+
+    await _conversationsRef.doc(conversationId).update({
+      'admins': FieldValue.arrayRemove([targetAdminId]),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Member leaves group. Handles safe admin reassignment if the leaving user was the sole admin.
+  Future<void> leaveGroup({
+    required String conversationId,
+    required String userId,
+    required String userName,
+  }) async {
+    final doc = await _conversationsRef.doc(conversationId).get();
+    if (!doc.exists) return;
+    final conv = ConversationModel.fromFirestore(doc);
+
+    final remainingParticipants =
+        conv.participants.where((uid) => uid != userId).toList();
+
+    final updates = <String, dynamic>{
+      'participants': FieldValue.arrayRemove([userId]),
+      'participantDetails.$userId': FieldValue.delete(),
+      'unreadCounts.$userId': FieldValue.delete(),
+      'mutedBy': FieldValue.arrayRemove([userId]),
+      'lastMessage': '$userName left the group',
+      'lastMessageAt': FieldValue.serverTimestamp(),
+      'lastMessageSenderId': userId,
+      'updatedAt': FieldValue.serverTimestamp(),
+    };
+
+    // If leaving user was an admin, handle admin list update safely:
+    // Only admins modify the admins array (keeps Firestore security rules valid for non-admins)
+    if (conv.isAdmin(userId)) {
+      final remainingAdmins =
+          conv.admins.where((uid) => uid != userId).toList();
+      if (remainingAdmins.isEmpty && remainingParticipants.isNotEmpty) {
+        // Sole admin leaving with remaining members: assign next member as admin
+        updates['admins'] = [remainingParticipants.first];
+      } else {
+        updates['admins'] = FieldValue.arrayRemove([userId]);
+      }
+    }
+
+    final batch = _firestore.batch();
+    batch.update(_conversationsRef.doc(conversationId), updates);
+
+    // Add departure notice
+    final msgDocRef =
+        _conversationsRef.doc(conversationId).collection('messages').doc();
+    final systemMsg = MessageModel(
+      id: msgDocRef.id,
+      conversationId: conversationId,
+      senderId: userId,
+      receiverId: 'group',
+      text: '$userName left the group',
+      type: 'system',
+      senderName: userName,
+      createdAt: DateTime.now(),
+    );
+    batch.set(msgDocRef, {
+      ...systemMsg.toMap(),
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+
+    await batch.commit();
+  }
+
+  /// Toggles notifications mute state for a user on a group conversation.
+  Future<void> toggleGroupMute({
+    required String conversationId,
+    required String userId,
+    required bool mute,
+  }) async {
+    await _conversationsRef.doc(conversationId).update({
+      'mutedBy': mute
+          ? FieldValue.arrayUnion([userId])
+          : FieldValue.arrayRemove([userId]),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
   }
 }
 

@@ -11,6 +11,14 @@ class ConversationModel {
     this.unreadCounts = const {},
     this.mood,
     this.disappearingDuration,
+    this.type = 'direct',
+    this.name,
+    this.photoUrl,
+    this.description,
+    this.createdBy,
+    this.admins = const [],
+    this.mutedBy = const [],
+    this.typing = const {},
     required this.createdAt,
     required this.updatedAt,
   });
@@ -23,16 +31,53 @@ class ConversationModel {
   final String lastMessageSenderId;
   final Map<String, int> unreadCounts;
   final Map<String, dynamic>? mood;
-  final int?
-  disappearingDuration; // Duration in seconds (e.g. 60, 3600) or null if off
+  final int? disappearingDuration; // Duration in seconds (e.g. 60, 3600) or null if off
+  final String type; // 'direct' or 'group'
+  final String? name; // Group name
+  final String? photoUrl; // Group DP
+  final String? description; // Group description / about
+  final String? createdBy; // Creator user UID
+  final List<String> admins; // Admin user UIDs
+  final List<String> mutedBy; // User UIDs who muted notifications
+  final Map<String, dynamic> typing; // Maps userId -> bool or Timestamp
   final DateTime createdAt;
   final DateTime updatedAt;
 
+  bool get isGroup => type == 'group' || (name != null && name!.isNotEmpty);
   bool get hasMood => mood != null;
   String? get moodEmoji => mood?['emoji'] as String?;
   String? get moodLabel => mood?['label'] as String?;
   bool get isDisappearingActive =>
       disappearingDuration != null && disappearingDuration! > 0;
+
+  bool isAdmin(String userId) => admins.contains(userId) || createdBy == userId;
+  bool isMutedFor(String userId) => mutedBy.contains(userId);
+
+  /// Returns list of user IDs currently typing (excluding given userId)
+  List<String> typingUsers(String currentUserId) {
+    final list = <String>[];
+    final now = DateTime.now();
+    typing.forEach((uid, val) {
+      if (uid == currentUserId) return;
+      if (val == true) {
+        list.add(uid);
+      } else if (val is Timestamp) {
+        if (now.difference(val.toDate()).inSeconds < 10) {
+          list.add(uid);
+        }
+      }
+    });
+    return list;
+  }
+
+  String memberName(String userId) =>
+      participantDetails[userId]?['name'] as String? ?? 'CONVO User';
+
+  String? memberPhoto(String userId) =>
+      participantDetails[userId]?['photoUrl'] as String?;
+
+  String? memberEmail(String userId) =>
+      participantDetails[userId]?['email'] as String?;
 
   /// Generates a deterministic conversation ID for two users.
   static String getConversationId(String uid1, String uid2) {
@@ -40,7 +85,7 @@ class ConversationModel {
     return '${sorted[0]}_${sorted[1]}';
   }
 
-  /// Returns the other participant's UID given the current user's UID.
+  /// Returns the other participant's UID given the current user's UID (for direct chat).
   String otherParticipantId(String currentUserId) {
     return participants.firstWhere(
       (uid) => uid != currentUserId,
@@ -48,22 +93,31 @@ class ConversationModel {
     );
   }
 
-  /// Returns the other participant's display name.
+  /// Returns conversation display name (Group name for groups, or other participant name for 1-to-1).
   String otherParticipantName(String currentUserId) {
+    if (isGroup) {
+      return name?.trim().isNotEmpty == true ? name! : 'Group Chat';
+    }
     final otherId = otherParticipantId(currentUserId);
     final details = participantDetails[otherId];
     return details?['name'] as String? ?? 'CONVO User';
   }
 
-  /// Returns the other participant's email.
+  /// Returns other participant email or member count string for groups.
   String otherParticipantEmail(String currentUserId) {
+    if (isGroup) {
+      return '${participants.length} members';
+    }
     final otherId = otherParticipantId(currentUserId);
     final details = participantDetails[otherId];
     return details?['email'] as String? ?? '';
   }
 
-  /// Returns the other participant's photo URL if available.
+  /// Returns conversation photo URL (Group photo for groups, or other participant photo for 1-to-1).
   String? otherParticipantPhoto(String currentUserId) {
+    if (isGroup) {
+      return photoUrl;
+    }
     final otherId = otherParticipantId(currentUserId);
     final details = participantDetails[otherId];
     return details?['photoUrl'] as String?;
@@ -85,6 +139,14 @@ class ConversationModel {
       'unreadCounts': unreadCounts,
       'mood': mood,
       'disappearingDuration': disappearingDuration,
+      'type': type,
+      if (name != null) 'name': name,
+      if (photoUrl != null) 'photoUrl': photoUrl,
+      if (description != null) 'description': description,
+      if (createdBy != null) 'createdBy': createdBy,
+      'admins': admins,
+      'mutedBy': mutedBy,
+      'typing': typing,
       'createdAt': Timestamp.fromDate(createdAt),
       'updatedAt': Timestamp.fromDate(updatedAt),
     };
@@ -127,9 +189,22 @@ class ConversationModel {
       });
     }
 
+    final rawAdmins = map['admins'];
+    final admins = rawAdmins is List
+        ? rawAdmins.map((e) => e.toString()).toList()
+        : <String>[];
+
+    final rawMuted = map['mutedBy'];
+    final mutedBy = rawMuted is List
+        ? rawMuted.map((e) => e.toString()).toList()
+        : <String>[];
+
     final rawMood = map['mood'];
     final mood = rawMood is Map ? Map<String, dynamic>.from(rawMood) : null;
     final disappearingDuration = (map['disappearingDuration'] as num?)?.toInt();
+
+    final rawTyping = map['typing'];
+    final typing = rawTyping is Map ? Map<String, dynamic>.from(rawTyping) : <String, dynamic>{};
 
     return ConversationModel(
       id: docId ?? map['id'] as String? ?? '',
@@ -141,6 +216,14 @@ class ConversationModel {
       unreadCounts: unreadCounts,
       mood: mood,
       disappearingDuration: disappearingDuration,
+      type: map['type'] as String? ?? 'direct',
+      name: map['name'] as String?,
+      photoUrl: map['photoUrl'] as String?,
+      description: map['description'] as String?,
+      createdBy: map['createdBy'] as String?,
+      admins: admins,
+      mutedBy: mutedBy,
+      typing: typing,
       createdAt: parseDate(map['createdAt']),
       updatedAt: parseDate(map['updatedAt']),
     );
@@ -162,6 +245,14 @@ class ConversationModel {
     Map<String, int>? unreadCounts,
     Map<String, dynamic>? mood,
     int? disappearingDuration,
+    String? type,
+    String? name,
+    String? photoUrl,
+    String? description,
+    String? createdBy,
+    List<String>? admins,
+    List<String>? mutedBy,
+    Map<String, dynamic>? typing,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) {
@@ -175,6 +266,14 @@ class ConversationModel {
       unreadCounts: unreadCounts ?? this.unreadCounts,
       mood: mood ?? this.mood,
       disappearingDuration: disappearingDuration ?? this.disappearingDuration,
+      type: type ?? this.type,
+      name: name ?? this.name,
+      photoUrl: photoUrl ?? this.photoUrl,
+      description: description ?? this.description,
+      createdBy: createdBy ?? this.createdBy,
+      admins: admins ?? this.admins,
+      mutedBy: mutedBy ?? this.mutedBy,
+      typing: typing ?? this.typing,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );

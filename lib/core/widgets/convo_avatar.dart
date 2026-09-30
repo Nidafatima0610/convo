@@ -10,22 +10,27 @@ class ConvoAvatar extends StatelessWidget {
   const ConvoAvatar({
     super.key,
     required this.initials,
+    this.photoUrl,
     this.size = 56,
     this.status = ConvoAvatarStatus.none,
     this.showEditBadge = false,
+    this.isLoading = false,
     this.onTap,
   });
 
   final String initials;
+  final String? photoUrl;
   final double size;
   final ConvoAvatarStatus status;
   final bool showEditBadge;
+  final bool isLoading;
   final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final statusColor = _statusColor(context);
     final indicatorSize = (size * 0.26).clamp(10.0, 20.0);
+    final hasPhoto = photoUrl != null && photoUrl!.trim().isNotEmpty;
 
     return GestureDetector(
       onTap: onTap,
@@ -50,15 +55,74 @@ class ConvoAvatar extends StatelessWidget {
                 ),
               ],
             ),
-            child: Center(
-              child: Text(
-                initials.toUpperCase(),
-                style: AppTypography.titleLarge.copyWith(
-                  color: Colors.white,
-                  fontSize: size * 0.38,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.5,
-                ),
+            child: ClipOval(
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  // Default initials fallback
+                  Center(
+                    child: Text(
+                      initials.toUpperCase(),
+                      style: AppTypography.titleLarge.copyWith(
+                        color: Colors.white,
+                        fontSize: size * 0.38,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ),
+
+                  // Profile picture if available
+                  if (hasPhoto)
+                    Image.network(
+                      photoUrl!,
+                      fit: BoxFit.cover,
+                      errorBuilder: (context, error, stackTrace) {
+                        return Center(
+                          child: Text(
+                            initials.toUpperCase(),
+                            style: AppTypography.titleLarge.copyWith(
+                              color: Colors.white,
+                              fontSize: size * 0.38,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        );
+                      },
+                      loadingBuilder: (context, child, loadingProgress) {
+                        if (loadingProgress == null) return child;
+                        return Center(
+                          child: Text(
+                            initials.toUpperCase(),
+                            style: AppTypography.titleLarge.copyWith(
+                              color: Colors.white,
+                              fontSize: size * 0.38,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+
+                  // Loading spinner overlay
+                  if (isLoading)
+                    Container(
+                      color: Colors.black.withValues(alpha: 0.45),
+                      child: Center(
+                        child: SizedBox(
+                          width: size * 0.35,
+                          height: size * 0.35,
+                          child: const CircularProgressIndicator(
+                            strokeWidth: 2.5,
+                            valueColor:
+                                AlwaysStoppedAnimation<Color>(Colors.white),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
           ),

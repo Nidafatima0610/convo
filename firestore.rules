@@ -13,12 +13,42 @@ service cloud.firestore {
     
     // Conversation rules
     match /conversations/{conversationId} {
-      // Allow read/update if the authenticated user is one of the participants
+      // Allow read if the authenticated user is one of the participants
       allow read: if request.auth != null && request.auth.uid in resource.data.participants;
-      // Allow create if authenticated user is one of the participants
-      allow create: if request.auth != null && request.auth.uid in request.resource.data.participants;
-      // Allow update if user is participant (e.g. updating lastMessage, unreadCounts)
-      allow update: if request.auth != null && request.auth.uid in resource.data.participants;
+      
+      // Allow create if authenticated user is one of the participants.
+      // If creating a group, user must be the creator and in admins list.
+      allow create: if request.auth != null && 
+        request.auth.uid in request.resource.data.participants &&
+        (
+          request.resource.data.type != 'group' ||
+          (
+            request.auth.uid == request.resource.data.createdBy &&
+            request.auth.uid in request.resource.data.admins
+          )
+        );
+
+      // Allow update:
+      // Direct chats: any participant can update.
+      // Group chats:
+      // - Admins can update any group metadata, participant list, or admin list.
+      // - Non-admin participants can only update messaging/unread metadata, mute preferences, or leave the group.
+      allow update: if request.auth != null && request.auth.uid in resource.data.participants && (
+        resource.data.type != 'group' ||
+        request.auth.uid in resource.data.admins ||
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'lastMessage',
+          'lastMessageSenderId',
+          'lastMessageAt',
+          'updatedAt',
+          'unreadCounts',
+          'mutedBy',
+          'participants',
+          'participantDetails',
+          'typing'
+        ])
+      );
+      
       allow delete: if false;
 
       // Messages subcollection rules
@@ -27,21 +57,25 @@ service cloud.firestore {
         allow read: if request.auth != null && 
           request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
         
-        // Create if user is authenticated and matches the senderId
+        // Create if user is authenticated, matches senderId, and is a participant
         allow create: if request.auth != null && 
           request.auth.uid == request.resource.data.senderId &&
-          request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
+          (
+            exists(/databases/$(database)/documents/conversations/$(conversationId))
+              ? request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants
+              : request.auth.uid in getAfter(/databases/$(database)/documents/conversations/$(conversationId)).data.participants
+          );
         
         // Update:
         // 1) Sender can soft-delete their own message
-        // 2) Any participant can update read state (isRead, readAt), reactions, or game metadata
+        // 2) Any participant can update read state (isRead, readAt), reactions, game metadata, or deletedFor
         allow update: if request.auth != null && (
           // Sender updating (e.g. soft delete)
           request.auth.uid == resource.data.senderId ||
-          // Receiver updating read status or participants toggling reactions/game answers
+          // Receiver updating read status or participants toggling reactions/game answers/deletedFor
           (
             request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants &&
-            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead', 'readAt', 'reactions', 'metadata'])
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead', 'readAt', 'reactions', 'metadata', 'deletedFor'])
           )
         );
 

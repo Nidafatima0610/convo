@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/constants/app_strings.dart';
+import '../../../../core/routes/app_routes.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_radius.dart';
 import '../../../../core/theme/app_spacing.dart';
@@ -48,11 +50,16 @@ class SettingsScreen extends ConsumerWidget {
               iconColor: AppColors.blueGlow,
               title: AppStrings.notifications,
               subtitle: AppStrings.notificationsDesc,
-              onTap: () => _showPlaceholderModal(
-                context,
-                title: AppStrings.notifications,
-                description: 'Configure push notification priority, mesh alert vibrations, and conversation channels.',
-              ),
+              onTap: () => _showNotificationSettings(context, ref),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            _buildSettingsItem(
+              context,
+              icon: Icons.star_rounded,
+              iconColor: AppColors.accent,
+              title: 'Saved Messages',
+              subtitle: 'Access bookmarked messages, notes & media',
+              onTap: () => context.push(AppRoutes.starredMessages),
             ),
             const SizedBox(height: AppSpacing.xl),
             _buildSectionHeader(context, 'NEARBY & OFFLINE MESH'),
@@ -78,11 +85,16 @@ class SettingsScreen extends ConsumerWidget {
               iconColor: AppColors.accent,
               title: AppStrings.privacy,
               subtitle: AppStrings.privacyDesc,
-              onTap: () => _showPlaceholderModal(
-                context,
-                title: AppStrings.privacy,
-                description: 'Manage your local Bluetooth mesh discovery range, visibility to peers, and profile discovery.',
-              ),
+              onTap: () => _showPrivacySettings(context, ref),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            _buildSettingsItem(
+              context,
+              icon: Icons.block_rounded,
+              iconColor: AppColors.error,
+              title: 'Blocked Contacts',
+              subtitle: 'Manage blocked users and unblock',
+              onTap: () => _showBlockedContactsModal(context, ref),
             ),
             const SizedBox(height: AppSpacing.md),
             _buildSettingsItem(
@@ -271,6 +283,373 @@ class SettingsScreen extends ConsumerWidget {
               color: context.convoColors.textTertiary,
               size: 20,
             ),
+        ],
+      ),
+    );
+  }
+
+  void _showNotificationSettings(BuildContext context, WidgetRef ref) {
+    final user = ref.read(currentUserProfileProvider).asData?.value;
+    if (user == null) return;
+
+    final currentSettings =
+        Map<String, dynamic>.from(user.notificationSettings);
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: context.convoColors.cardBackground,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.xl)),
+      ),
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            final isEnabled = (currentSettings['enabled'] as bool?) ?? true;
+            final isPreview = (currentSettings['preview'] as bool?) ?? true;
+            final isSound = (currentSettings['sound'] as bool?) ?? true;
+
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(AppSpacing.lg),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.notifications_active_outlined,
+                              color: AppColors.blueGlow,
+                            ),
+                            const SizedBox(width: AppSpacing.sm),
+                            Text(
+                              'Notification Settings',
+                              style: AppTypography.titleLarge.copyWith(
+                                color: context.convoColors.textPrimary,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close_rounded),
+                          onPressed: () => Navigator.of(sheetContext).pop(),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                    Text(
+                      'Manage FCM message alerts, preview visibility, and notification sounds.',
+                      style: AppTypography.bodySmall.copyWith(
+                        color: context.convoColors.textSecondary,
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        'Push Notifications',
+                        style: AppTypography.titleMedium.copyWith(
+                          color: context.convoColors.textPrimary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      subtitle: Text(
+                        'Receive background and foreground message alerts',
+                        style: AppTypography.bodySmall.copyWith(
+                          color: context.convoColors.textSecondary,
+                        ),
+                      ),
+                      value: isEnabled,
+                      onChanged: (val) async {
+                        setModalState(() {
+                          currentSettings['enabled'] = val;
+                        });
+                        await ref
+                            .read(profileControllerProvider.notifier)
+                            .updateNotificationSettings(currentSettings);
+                      },
+                    ),
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        'Message Previews',
+                        style: AppTypography.titleMedium.copyWith(
+                          color: context.convoColors.textPrimary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      subtitle: Text(
+                        'Show sender name and message preview in notifications',
+                        style: AppTypography.bodySmall.copyWith(
+                          color: context.convoColors.textSecondary,
+                        ),
+                      ),
+                      value: isPreview,
+                      onChanged: !isEnabled
+                          ? null
+                          : (val) async {
+                              setModalState(() {
+                                currentSettings['preview'] = val;
+                              });
+                              await ref
+                                  .read(profileControllerProvider.notifier)
+                                  .updateNotificationSettings(currentSettings);
+                            },
+                    ),
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        'Sound & Vibration',
+                        style: AppTypography.titleMedium.copyWith(
+                          color: context.convoColors.textPrimary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      subtitle: Text(
+                        'Alert when new message is received',
+                        style: AppTypography.bodySmall.copyWith(
+                          color: context.convoColors.textSecondary,
+                        ),
+                      ),
+                      value: isSound,
+                      onChanged: !isEnabled
+                          ? null
+                          : (val) async {
+                              setModalState(() {
+                                currentSettings['sound'] = val;
+                              });
+                              await ref
+                                  .read(profileControllerProvider.notifier)
+                                  .updateNotificationSettings(currentSettings);
+                            },
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showPrivacySettings(BuildContext context, WidgetRef ref) {
+    final user = ref.read(currentUserProfileProvider).asData?.value;
+    if (user == null) return;
+
+    final currentSettings = Map<String, dynamic>.from(user.privacySettings);
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: context.convoColors.cardBackground,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.xl)),
+      ),
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            Widget buildPrivacySelector(String title, String key, String desc) {
+              final val = (currentSettings[key] as String?) ?? 'everyone';
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: AppTypography.titleMedium.copyWith(
+                      color: context.convoColors.textPrimary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    desc,
+                    style: AppTypography.bodySmall.copyWith(
+                      color: context.convoColors.textSecondary,
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.sm),
+                  SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment(value: 'everyone', label: Text('Everyone')),
+                      ButtonSegment(value: 'contacts', label: Text('Chats')),
+                      ButtonSegment(value: 'nobody', label: Text('Nobody')),
+                    ],
+                    selected: {val},
+                    onSelectionChanged: (newSelection) async {
+                      setModalState(() {
+                        currentSettings[key] = newSelection.first;
+                      });
+                      await ref
+                          .read(profileControllerProvider.notifier)
+                          .updatePrivacySettings(currentSettings);
+                    },
+                    style: SegmentedButton.styleFrom(
+                      selectedBackgroundColor: context.colorScheme.primary,
+                      selectedForegroundColor: Colors.white,
+                      backgroundColor: context.convoColors.surfaceSubtle,
+                      foregroundColor: context.convoColors.textSecondary,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: AppRadius.borderMd,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+                ],
+              );
+            }
+
+            return SafeArea(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(AppSpacing.lg),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.lock_outline_rounded,
+                              color: AppColors.accent,
+                            ),
+                            const SizedBox(width: AppSpacing.sm),
+                            Text(
+                              'Privacy Controls',
+                              style: AppTypography.headlineMedium.copyWith(
+                                color: context.convoColors.textPrimary,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close_rounded),
+                          onPressed: () => Navigator.of(sheetContext).pop(),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                    Text(
+                      'Control who can view your sensitive profile details and presence.',
+                      style: AppTypography.bodySmall.copyWith(
+                        color: context.convoColors.textSecondary,
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.lg),
+                    buildPrivacySelector(
+                      'Last Seen',
+                      'lastSeen',
+                      'Who can see when you were last online',
+                    ),
+                    buildPrivacySelector(
+                      'Online Status',
+                      'online',
+                      'Who can see your real-time active status',
+                    ),
+                    buildPrivacySelector(
+                      'Profile Photo',
+                      'photo',
+                      'Who can view your display picture',
+                    ),
+                    buildPrivacySelector(
+                      'About / Bio',
+                      'bio',
+                      'Who can view your about snippet',
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showBlockedContactsModal(BuildContext context, WidgetRef ref) {
+    final user = ref.read(currentUserProfileProvider).asData?.value;
+    if (user == null) return;
+
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: context.convoColors.cardBackground,
+        shape: RoundedRectangleBorder(borderRadius: AppRadius.borderXl),
+        title: Row(
+          children: [
+            const Icon(Icons.block_rounded, color: AppColors.error),
+            const SizedBox(width: AppSpacing.sm),
+            Text(
+              'Blocked Contacts',
+              style: AppTypography.titleLarge.copyWith(
+                color: context.convoColors.textPrimary,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: user.blockedUsers.isEmpty
+              ? Padding(
+                  padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
+                  child: Text(
+                    'You have not blocked any contacts.',
+                    style: AppTypography.bodyMedium.copyWith(
+                      color: context.convoColors.textSecondary,
+                    ),
+                  ),
+                )
+              : ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: user.blockedUsers.length,
+                  separatorBuilder: (_, _) => const Divider(height: 1),
+                  itemBuilder: (context, index) {
+                    final blockedUid = user.blockedUsers[index];
+                    return ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        'User: ${blockedUid.length > 8 ? blockedUid.substring(0, 8) : blockedUid}...',
+                        style: AppTypography.bodyMedium.copyWith(
+                          color: context.convoColors.textPrimary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      trailing: TextButton(
+                        onPressed: () async {
+                          await ref
+                              .read(profileControllerProvider.notifier)
+                              .unblockUser(blockedUid);
+                          if (dialogCtx.mounted) {
+                            Navigator.of(dialogCtx).pop();
+                          }
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Contact unblocked.'),
+                                behavior: SnackBarBehavior.floating,
+                              ),
+                            );
+                          }
+                        },
+                        child: const Text('Unblock'),
+                      ),
+                    );
+                  },
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(),
+            child: const Text('Close'),
+          ),
         ],
       ),
     );

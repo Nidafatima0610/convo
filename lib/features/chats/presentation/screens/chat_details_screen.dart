@@ -15,7 +15,10 @@ import '../../../auth/domain/models/convo_user.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
 import '../../../calls/domain/models/call_model.dart';
 import '../../../calls/presentation/providers/call_providers.dart';
+import '../../../profile/domain/privacy_helper.dart';
 import '../providers/chat_providers.dart';
+import 'chat_media_gallery_screen.dart';
+import 'starred_messages_screen.dart';
 
 class ChatDetailsScreen extends ConsumerStatefulWidget {
   const ChatDetailsScreen({
@@ -114,6 +117,26 @@ class _ChatDetailsScreenState extends ConsumerState<ChatDetailsScreen> {
     final liveUser =
         ref.watch(userPresenceProvider(widget.otherUser.uid)).asData?.value ??
         widget.otherUser;
+    final currentUser = ref.watch(currentUserProfileProvider).asData?.value;
+    final isBlockedByMe =
+        currentUser?.isUserBlocked(widget.otherUser.uid) ?? false;
+
+    final canSeePhoto = PrivacyHelper.canViewPhoto(
+      targetUser: liveUser,
+      viewerUserId: currentUser?.uid,
+      hasConversation: true,
+    );
+    final canSeeOnline = PrivacyHelper.canViewOnline(
+      targetUser: liveUser,
+      viewerUserId: currentUser?.uid,
+      hasConversation: true,
+    );
+    final canSeeBio = PrivacyHelper.canViewBio(
+      targetUser: liveUser,
+      viewerUserId: currentUser?.uid,
+      hasConversation: true,
+    );
+
     final messagesAsync = ref.watch(
       conversationMessagesProvider(widget.conversationId),
     );
@@ -152,10 +175,13 @@ class _ChatDetailsScreenState extends ConsumerState<ChatDetailsScreen> {
                   children: [
                     ConvoAvatar(
                       initials: initials,
+                      photoUrl: canSeePhoto ? liveUser.photoUrl : null,
                       size: 88,
-                      status: liveUser.isOnline
-                          ? ConvoAvatarStatus.online
-                          : ConvoAvatarStatus.offline,
+                      status: canSeeOnline
+                          ? (liveUser.isOnline
+                                ? ConvoAvatarStatus.online
+                                : ConvoAvatarStatus.offline)
+                          : ConvoAvatarStatus.none,
                     ),
                     const SizedBox(height: AppSpacing.md),
                     Text(
@@ -165,20 +191,41 @@ class _ChatDetailsScreenState extends ConsumerState<ChatDetailsScreen> {
                         fontWeight: FontWeight.w700,
                       ),
                     ),
+                    if (canSeeBio &&
+                        liveUser.bio != null &&
+                        liveUser.bio!.trim().isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        liveUser.bio!.trim(),
+                        textAlign: TextAlign.center,
+                        style: AppTypography.bodyMedium.copyWith(
+                          color: context.convoColors.textSecondary,
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 2),
                     Text(
                       liveUser.email,
-                      style: AppTypography.bodyMedium.copyWith(
-                        color: context.convoColors.textSecondary,
+                      style: AppTypography.bodySmall.copyWith(
+                        color: context.convoColors.textTertiary,
                       ),
                     ),
-                    const SizedBox(height: AppSpacing.sm),
-                    ConvoBadge(
-                      label: liveUser.isOnline ? 'ACTIVE NOW' : 'OFFLINE',
-                      variant: liveUser.isOnline
-                          ? ConvoBadgeVariant.accent
-                          : ConvoBadgeVariant.subtle,
-                    ),
+                    if (isBlockedByMe) ...[
+                      const SizedBox(height: AppSpacing.sm),
+                      const ConvoBadge(
+                        label: 'BLOCKED',
+                        variant: ConvoBadgeVariant.warning,
+                        icon: Icons.block_rounded,
+                      ),
+                    ] else if (canSeeOnline) ...[
+                      const SizedBox(height: AppSpacing.sm),
+                      ConvoBadge(
+                        label: liveUser.isOnline ? 'ACTIVE NOW' : 'OFFLINE',
+                        variant: liveUser.isOnline
+                            ? ConvoBadgeVariant.accent
+                            : ConvoBadgeVariant.subtle,
+                      ),
+                    ],
                     const SizedBox(height: AppSpacing.lg),
 
                     // Quick Action Buttons Row
@@ -214,6 +261,15 @@ class _ChatDetailsScreenState extends ConsumerState<ChatDetailsScreen> {
 
               // Shared Media Section
               ConvoCard(
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => ChatMediaGalleryScreen(
+                        conversationId: widget.conversationId,
+                      ),
+                    ),
+                  );
+                },
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -227,18 +283,30 @@ class _ChatDetailsScreenState extends ConsumerState<ChatDetailsScreen> {
                         const SizedBox(width: AppSpacing.sm),
                         Expanded(
                           child: Text(
-                            'Shared Media',
+                            'Media, Links & Files',
                             style: AppTypography.titleMedium.copyWith(
                               color: context.convoColors.textPrimary,
                               fontWeight: FontWeight.w700,
                             ),
                           ),
                         ),
-                        Text(
-                          '${mediaMessages.length}',
-                          style: AppTypography.bodySmall.copyWith(
-                            color: context.convoColors.textTertiary,
-                          ),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              '${mediaMessages.length}',
+                              style: AppTypography.bodySmall.copyWith(
+                                color: context.colorScheme.primary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            Icon(
+                              Icons.chevron_right_rounded,
+                              size: 16,
+                              color: context.convoColors.textTertiary,
+                            ),
+                          ],
                         ),
                       ],
                     ),
@@ -247,7 +315,7 @@ class _ChatDetailsScreenState extends ConsumerState<ChatDetailsScreen> {
                       Padding(
                         padding: const EdgeInsets.symmetric(vertical: 8),
                         child: Text(
-                          'No photos, videos, or voice messages shared yet.',
+                          'No photos, videos, or files shared yet.',
                           style: AppTypography.bodySmall.copyWith(
                             color: context.convoColors.textTertiary,
                           ),
@@ -329,6 +397,37 @@ class _ChatDetailsScreenState extends ConsumerState<ChatDetailsScreen> {
                     Divider(color: context.convoColors.cardBorder, height: 1),
                     ListTile(
                       contentPadding: EdgeInsets.zero,
+                      leading: const Icon(
+                        Icons.star_outline_rounded,
+                        color: AppColors.accent,
+                      ),
+                      title: Text(
+                        'Starred Messages',
+                        style: AppTypography.titleMedium.copyWith(
+                          color: context.convoColors.textPrimary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      subtitle: Text(
+                        'Saved messages in this conversation',
+                        style: AppTypography.bodySmall.copyWith(
+                          color: context.convoColors.textSecondary,
+                        ),
+                      ),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => StarredMessagesScreen(
+                              conversationId: widget.conversationId,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    Divider(color: context.convoColors.cardBorder, height: 1),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
                       leading: Icon(
                         Icons.search_rounded,
                         color: context.colorScheme.primary,
@@ -342,7 +441,7 @@ class _ChatDetailsScreenState extends ConsumerState<ChatDetailsScreen> {
                       ),
                       trailing: const Icon(Icons.chevron_right_rounded),
                       onTap: () {
-                        context.pop();
+                        context.pop(true);
                       },
                     ),
                   ],
@@ -350,6 +449,46 @@ class _ChatDetailsScreenState extends ConsumerState<ChatDetailsScreen> {
               ),
 
               const SizedBox(height: AppSpacing.xl),
+
+              // Danger Zone: Block / Unblock Contact
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () => _toggleBlockUser(isBlockedByMe),
+                  icon: Icon(
+                    isBlockedByMe
+                        ? Icons.check_circle_outline_rounded
+                        : Icons.block_rounded,
+                    color: isBlockedByMe ? AppColors.primary : AppColors.error,
+                    size: 18,
+                  ),
+                  label: Text(
+                    isBlockedByMe ? 'Unblock Contact' : 'Block Contact',
+                    style: AppTypography.titleMedium.copyWith(
+                      color:
+                          isBlockedByMe ? AppColors.primary : AppColors.error,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(
+                      color: (isBlockedByMe
+                              ? AppColors.primary
+                              : AppColors.error)
+                          .withValues(alpha: 0.35),
+                      width: 1.2,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: AppRadius.borderMd,
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      vertical: AppSpacing.md,
+                    ),
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: AppSpacing.md),
 
               // Danger Zone: Clear Chat
               SizedBox(
@@ -385,6 +524,79 @@ class _ChatDetailsScreenState extends ConsumerState<ChatDetailsScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  void _toggleBlockUser(bool currentlyBlocked) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: context.convoColors.cardBackground,
+        shape: RoundedRectangleBorder(borderRadius: AppRadius.borderXl),
+        title: Row(
+          children: [
+            Icon(
+              currentlyBlocked
+                  ? Icons.check_circle_outline_rounded
+                  : Icons.block_rounded,
+              color: currentlyBlocked ? AppColors.primary : AppColors.error,
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            Text(
+              currentlyBlocked ? 'Unblock User?' : 'Block User?',
+              style: AppTypography.titleLarge.copyWith(
+                color: context.convoColors.textPrimary,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          currentlyBlocked
+              ? 'This contact will be able to send you messages and view your permitted profile details.'
+              : 'Blocked contacts will not be able to send you messages. Historical messages will remain intact.',
+          style: AppTypography.bodyMedium.copyWith(
+            color: context.convoColors.textSecondary,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              Navigator.of(ctx).pop();
+              if (currentlyBlocked) {
+                await ref
+                    .read(profileControllerProvider.notifier)
+                    .unblockUser(widget.otherUser.uid);
+              } else {
+                await ref
+                    .read(profileControllerProvider.notifier)
+                    .blockUser(widget.otherUser.uid);
+              }
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      currentlyBlocked
+                          ? 'Contact unblocked.'
+                          : 'Contact blocked.',
+                    ),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              }
+            },
+            style: FilledButton.styleFrom(
+              backgroundColor:
+                  currentlyBlocked ? AppColors.primary : AppColors.error,
+            ),
+            child: Text(currentlyBlocked ? 'Unblock' : 'Block'),
+          ),
+        ],
       ),
     );
   }

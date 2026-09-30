@@ -20,6 +20,8 @@ class MessageModel {
     this.replyToMessageId,
     this.replyToSnippet,
     this.replyToSenderName,
+    this.senderName,
+    this.senderPhotoUrl,
     this.reactions = const {},
     this.isDeleted = false,
     this.deletedAt,
@@ -27,6 +29,9 @@ class MessageModel {
     this.metadata,
     this.expiresAt,
     this.isSecret = false,
+    this.isForwarded = false,
+    this.forwardedFrom,
+    this.deletedFor = const [],
   });
 
   final String id;
@@ -47,6 +52,11 @@ class MessageModel {
   final String? replyToMessageId;
   final String? replyToSnippet;
   final String? replyToSenderName;
+  final String? senderName;
+  final String? senderPhotoUrl;
+  final bool isForwarded;
+  final String? forwardedFrom;
+  final List<String> deletedFor;
 
   /// Maps userId -> emoji string (e.g., {'uid123': '❤️'})
   final Map<String, String> reactions;
@@ -81,6 +91,9 @@ class MessageModel {
     return counts;
   }
 
+  /// Returns true if message is deleted generally or specifically for the user
+  bool isDeletedFor(String userId) => isDeleted || deletedFor.contains(userId);
+
   /// Returns the emoji the given user reacted with, if any
   String? reactionOfUser(String userId) => reactions[userId];
 
@@ -104,6 +117,8 @@ class MessageModel {
       if (replyToMessageId != null) 'replyToMessageId': replyToMessageId,
       if (replyToSnippet != null) 'replyToSnippet': replyToSnippet,
       if (replyToSenderName != null) 'replyToSenderName': replyToSenderName,
+      if (senderName != null) 'senderName': senderName,
+      if (senderPhotoUrl != null) 'senderPhotoUrl': senderPhotoUrl,
       'reactions': reactions,
       'isDeleted': isDeleted,
       if (deletedAt != null) 'deletedAt': Timestamp.fromDate(deletedAt!),
@@ -111,6 +126,9 @@ class MessageModel {
       if (metadata != null) 'metadata': metadata,
       if (expiresAt != null) 'expiresAt': Timestamp.fromDate(expiresAt!),
       'isSecret': isSecret,
+      'isForwarded': isForwarded,
+      if (forwardedFrom != null) 'forwardedFrom': forwardedFrom,
+      'deletedFor': deletedFor,
     };
   }
 
@@ -134,6 +152,11 @@ class MessageModel {
       });
     }
 
+    final rawDeletedFor = map['deletedFor'];
+    final deletedFor = rawDeletedFor is List
+        ? rawDeletedFor.map((e) => e.toString()).toList()
+        : <String>[];
+
     return MessageModel(
       id: docId ?? map['id'] as String? ?? '',
       conversationId: map['conversationId'] as String? ?? '',
@@ -153,6 +176,8 @@ class MessageModel {
       replyToMessageId: map['replyToMessageId'] as String?,
       replyToSnippet: map['replyToSnippet'] as String?,
       replyToSenderName: map['replyToSenderName'] as String?,
+      senderName: map['senderName'] as String?,
+      senderPhotoUrl: map['senderPhotoUrl'] as String?,
       reactions: reactions,
       isDeleted: map['isDeleted'] as bool? ?? false,
       deletedAt: map['deletedAt'] != null ? parseDate(map['deletedAt']) : null,
@@ -162,6 +187,9 @@ class MessageModel {
           : null,
       expiresAt: map['expiresAt'] != null ? parseDate(map['expiresAt']) : null,
       isSecret: map['isSecret'] as bool? ?? false,
+      isForwarded: map['isForwarded'] as bool? ?? false,
+      forwardedFrom: map['forwardedFrom'] as String?,
+      deletedFor: deletedFor,
     );
   }
 
@@ -190,6 +218,8 @@ class MessageModel {
     String? replyToMessageId,
     String? replyToSnippet,
     String? replyToSenderName,
+    String? senderName,
+    String? senderPhotoUrl,
     Map<String, String>? reactions,
     bool? isDeleted,
     DateTime? deletedAt,
@@ -197,6 +227,9 @@ class MessageModel {
     Map<String, dynamic>? metadata,
     DateTime? expiresAt,
     bool? isSecret,
+    bool? isForwarded,
+    String? forwardedFrom,
+    List<String>? deletedFor,
   }) {
     return MessageModel(
       id: id ?? this.id,
@@ -217,6 +250,8 @@ class MessageModel {
       replyToMessageId: replyToMessageId ?? this.replyToMessageId,
       replyToSnippet: replyToSnippet ?? this.replyToSnippet,
       replyToSenderName: replyToSenderName ?? this.replyToSenderName,
+      senderName: senderName ?? this.senderName,
+      senderPhotoUrl: senderPhotoUrl ?? this.senderPhotoUrl,
       reactions: reactions ?? this.reactions,
       isDeleted: isDeleted ?? this.isDeleted,
       deletedAt: deletedAt ?? this.deletedAt,
@@ -224,6 +259,9 @@ class MessageModel {
       metadata: metadata ?? this.metadata,
       expiresAt: expiresAt ?? this.expiresAt,
       isSecret: isSecret ?? this.isSecret,
+      isForwarded: isForwarded ?? this.isForwarded,
+      forwardedFrom: forwardedFrom ?? this.forwardedFrom,
+      deletedFor: deletedFor ?? this.deletedFor,
     );
   }
 }

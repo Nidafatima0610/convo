@@ -13,9 +13,14 @@ import '../../features/calls/presentation/screens/active_call_screen.dart';
 import '../../features/calls/presentation/screens/calls_screen.dart';
 import '../../features/calls/presentation/screens/incoming_call_screen.dart';
 import '../../features/capsules/presentation/screens/capsules_screen.dart';
+import '../../features/chats/presentation/screens/archived_chats_screen.dart';
 import '../../features/chats/presentation/screens/chat_details_screen.dart';
+import '../../features/chats/presentation/screens/chat_media_gallery_screen.dart';
 import '../../features/chats/presentation/screens/chat_screen.dart';
 import '../../features/chats/presentation/screens/chats_screen.dart';
+import '../../features/chats/presentation/screens/create_group_screen.dart';
+import '../../features/chats/presentation/screens/group_info_screen.dart';
+import '../../features/chats/presentation/screens/starred_messages_screen.dart';
 import '../../features/discover/presentation/screens/discover_screen.dart';
 import '../../features/nearby/presentation/screens/nearby_screen.dart';
 import '../../features/profile/presentation/screens/profile_screen.dart';
@@ -132,7 +137,48 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               );
             },
           ),
+          GoRoute(
+            path: 'group_info',
+            name: 'groupInfo',
+            parentNavigatorKey: rootNavigatorKey,
+            builder: (context, state) {
+              final conversationId =
+                  state.pathParameters['conversationId'] ?? '';
+              return GroupInfoScreen(conversationId: conversationId);
+            },
+          ),
+          GoRoute(
+            path: 'media',
+            name: 'chatMedia',
+            parentNavigatorKey: rootNavigatorKey,
+            builder: (context, state) {
+              final conversationId =
+                  state.pathParameters['conversationId'] ?? '';
+              return ChatMediaGalleryScreen(conversationId: conversationId);
+            },
+          ),
         ],
+      ),
+      GoRoute(
+        path: AppRoutes.starredMessages,
+        name: 'starredMessages',
+        parentNavigatorKey: rootNavigatorKey,
+        builder: (context, state) {
+          final conversationId = state.extra as String?;
+          return StarredMessagesScreen(conversationId: conversationId);
+        },
+      ),
+      GoRoute(
+        path: AppRoutes.archivedChats,
+        name: 'archivedChats',
+        parentNavigatorKey: rootNavigatorKey,
+        builder: (context, state) => const ArchivedChatsScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.createGroup,
+        name: 'createGroup',
+        parentNavigatorKey: rootNavigatorKey,
+        builder: (context, state) => const CreateGroupScreen(),
       ),
       GoRoute(
         path: AppRoutes.activeCall,

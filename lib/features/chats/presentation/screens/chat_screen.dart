@@ -31,9 +31,14 @@ import '../../../stickers/presentation/widgets/sticker_picker_sheet.dart';
 import '../../../voice_effects/domain/models/voice_effect.dart';
 import '../../../voice_effects/presentation/widgets/voice_effect_preview_bar.dart';
 import '../../domain/models/conversation_model.dart';
+import '../../domain/models/message_model.dart';
+import '../../../../services/notifications/notification_service.dart';
+import '../../../profile/domain/privacy_helper.dart';
 import '../providers/chat_providers.dart';
 import '../widgets/chat_magic_sheet.dart';
 import '../widgets/convo_emoji_picker.dart';
+import '../widgets/forward_message_sheet.dart';
+import '../../../../services/local_storage/chat_preferences_service.dart';
 import '../widgets/message_bubble.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
@@ -63,9 +68,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   double _uploadProgress = 0.0;
   String _uploadStatusText = 'Uploading media...';
 
+  // Multi-selection state
+  bool _isSelectionMode = false;
+  final Set<String> _selectedMessageIds = {};
+  final Map<String, MessageModel> _selectedMessages = {};
+
+  // In-chat search state
+  bool _isSearching = false;
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+
+  // Typing debounce timer
+  Timer? _typingTimer;
+
   @override
   void initState() {
     super.initState();
+    NotificationService.activeConversationId = widget.conversationId;
     _textController.addListener(_onTextChanged);
     _focusNode.addListener(_onFocusChanged);
     _scrollController.addListener(_onScroll);
@@ -80,11 +99,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   void dispose() {
+    if (NotificationService.activeConversationId == widget.conversationId) {
+      NotificationService.activeConversationId = null;
+    }
     _recordingTimer?.cancel();
+    _typingTimer?.cancel();
     _textController.removeListener(_onTextChanged);
     _focusNode.removeListener(_onFocusChanged);
     _scrollController.removeListener(_onScroll);
     _textController.dispose();
+    _searchController.dispose();
     _scrollController.dispose();
     _focusNode.dispose();
     super.dispose();
@@ -108,10 +132,202 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
+  void _sendTypingStatus(bool isTyping) {
+    if (!mounted) return;
+    final currentUserId = ref.read(authStateChangesProvider).asData?.value?.uid;
+    if (currentUserId == null || currentUserId.isEmpty) return;
+    ref.read(chatControllerProvider.notifier).setTypingStatus(
+      conversationId: widget.conversationId,
+      isTyping: isTyping,
+    );
+  }
+
   void _onTextChanged() {
     final canSend = _textController.text.trim().isNotEmpty;
     if (canSend != _canSend) {
       setState(() => _canSend = canSend);
+    }
+
+    if (_textController.text.trim().isNotEmpty) {
+      _sendTypingStatus(true);
+      _typingTimer?.cancel();
+      _typingTimer = Timer(const Duration(seconds: 3), () {
+        _sendTypingStatus(false);
+      });
+    } else {
+      _sendTypingStatus(false);
+    }
+  }
+
+  void _toggleMessageSelection(MessageModel message) {
+    setState(() {
+      if (_selectedMessageIds.contains(message.id)) {
+        _selectedMessageIds.remove(message.id);
+        _selectedMessages.remove(message.id);
+        if (_selectedMessageIds.isEmpty) {
+          _isSelectionMode = false;
+        }
+      } else {
+        _selectedMessageIds.add(message.id);
+        _selectedMessages[message.id] = message;
+      }
+    });
+  }
+
+  void _startSelectionWith(MessageModel message) {
+    setState(() {
+      _isSelectionMode = true;
+      _selectedMessageIds.add(message.id);
+      _selectedMessages[message.id] = message;
+    });
+  }
+
+  void _clearSelection() {
+    setState(() {
+      _isSelectionMode = false;
+      _selectedMessageIds.clear();
+      _selectedMessages.clear();
+    });
+  }
+
+  void _copySelectedMessages() {
+    final textList = _selectedMessages.values
+        .where((m) => !m.isMedia && m.text.isNotEmpty && !m.isDeleted)
+        .map((m) => m.text)
+        .toList();
+    if (textList.isNotEmpty) {
+      Clipboard.setData(ClipboardData(text: textList.join('\n\n')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${textList.length} message(s) copied to clipboard'),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+    _clearSelection();
+  }
+
+  Future<void> _starSelectedMessages() async {
+    final prefs = ref.read(chatPreferencesServiceProvider);
+    for (final m in _selectedMessages.values) {
+      if (!m.isDeleted) {
+        await prefs.toggleStarMessage(m);
+      }
+    }
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Starred messages updated'),
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+    _clearSelection();
+  }
+
+  void _deleteSelectedMessages(String currentUserId) {
+    final selectedList = _selectedMessages.values.toList();
+    final allMine = selectedList.every((m) => m.senderId == currentUserId);
+
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: context.convoColors.cardBackground,
+        shape: RoundedRectangleBorder(borderRadius: AppRadius.borderXl),
+        title: Text(
+          'Delete ${selectedList.length} Messages?',
+          style: AppTypography.titleLarge.copyWith(
+            color: context.convoColors.textPrimary,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        content: Text(
+          allMine
+              ? 'Choose whether to delete these messages for yourself or for everyone.'
+              : 'These messages will be removed from your chat on this device.',
+          style: AppTypography.bodyMedium.copyWith(
+            color: context.convoColors.textSecondary,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.of(dialogCtx).pop();
+              for (final m in selectedList) {
+                await ref
+                    .read(chatControllerProvider.notifier)
+                    .deleteMessageForMe(
+                      conversationId: widget.conversationId,
+                      messageId: m.id,
+                    );
+              }
+              _clearSelection();
+            },
+            child: const Text('Delete for me'),
+          ),
+          if (allMine)
+            FilledButton(
+              onPressed: () async {
+                Navigator.of(dialogCtx).pop();
+                for (final m in selectedList) {
+                  await ref
+                      .read(chatControllerProvider.notifier)
+                      .deleteMessageForEveryone(
+                        conversationId: widget.conversationId,
+                        messageId: m.id,
+                      );
+                }
+                _clearSelection();
+              },
+              style: FilledButton.styleFrom(
+                backgroundColor: AppColors.error,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Delete for everyone'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _toggleStarMessage(MessageModel message) async {
+    final prefs = ref.read(chatPreferencesServiceProvider);
+    await prefs.toggleStarMessage(message);
+  }
+
+  void _jumpToMessage(String messageId, List<MessageModel> messages) {
+    final index = messages.indexWhere((m) => m.id == messageId);
+    if (index != -1 && _scrollController.hasClients) {
+      final targetOffset = (index * 72.0).clamp(
+        0.0,
+        _scrollController.position.maxScrollExtent,
+      );
+      _scrollController.animateTo(
+        targetOffset,
+        duration: const Duration(milliseconds: 400),
+        curve: Curves.easeInOut,
+      );
+    } else {
+      ref
+          .read(
+            conversationPaginatedMessagesProvider(
+              widget.conversationId,
+            ).notifier,
+          )
+          .loadMore();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Loading older messages...'),
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 1),
+        ),
+      );
     }
   }
 
@@ -138,18 +354,30 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     setState(() => _canSend = false);
 
     final expiresAt = _calculateExpiresAt(conversation);
+    final currentUser = ref.read(currentUserProfileProvider).asData?.value;
+    final currentConv = ref
+            .read(singleConversationProvider(widget.conversationId))
+            .asData
+            ?.value ??
+        conversation;
+    final isGroup = currentConv?.isGroup == true;
+    final recipientIds = isGroup
+        ? currentConv!.participants
+        : (receiverId.isNotEmpty ? [receiverId] : <String>[]);
 
     await ref
         .read(chatControllerProvider.notifier)
         .sendMessage(
           conversationId: widget.conversationId,
-          receiverId: receiverId,
+          receiverId: isGroup ? 'group' : receiverId,
+          recipientIds: recipientIds,
+          senderName: currentUser?.name,
+          senderPhotoUrl: currentUser?.photoUrl,
           text: text,
           replyToMessageId: replyingMessage?.id,
           replyToSnippet: replyingMessage?.text,
-          replyToSenderName: replyingMessage?.senderId == receiverId
-              ? receiverName
-              : 'You',
+          replyToSenderName: replyingMessage?.senderName ??
+              (replyingMessage?.senderId == receiverId ? receiverName : 'You'),
           expiresAt: expiresAt,
           isSecret: expiresAt != null,
         );
@@ -267,7 +495,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   ) async {
     final currentUserId =
         ref.read(authStateChangesProvider).asData?.value?.uid ?? '';
+    final currentUser = ref.read(currentUserProfileProvider).asData?.value;
     final mediaService = ref.read(mediaServiceProvider);
+    final isGroup = conversation?.isGroup == true;
 
     setState(() {
       _isUploading = true;
@@ -293,7 +523,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             .read(chatControllerProvider.notifier)
             .sendMediaMessage(
               conversationId: widget.conversationId,
-              receiverId: otherUserId,
+              receiverId: isGroup ? 'group' : otherUserId,
+              recipientIds: isGroup ? conversation!.participants : [otherUserId],
+              senderName: currentUser?.name,
+              senderPhotoUrl: currentUser?.photoUrl,
               type: 'voice',
               mediaUrl: downloadUrl,
               durationMs: _recordedVoiceDuration * 1000,
@@ -376,7 +609,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               conversationId: widget.conversationId,
               receiverId: otherUserId,
               receiverName: otherUserName,
-              onCapsuleCreated: (capsule) => _sendCapsule(capsule, otherUserId),
+              onCapsuleCreated: (capsule) =>
+                  _sendCapsule(capsule, otherUserId, conversation),
             );
             break;
           case ChatMagicAction.secretChat:
@@ -396,12 +630,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   ) async {
     final expiresAt = _calculateExpiresAt(conversation);
     final isSecret = expiresAt != null;
+    final currentUser = ref.read(currentUserProfileProvider).asData?.value;
+    final isGroup = conversation?.isGroup == true;
 
     await ref
         .read(chatControllerProvider.notifier)
         .sendMessage(
           conversationId: widget.conversationId,
-          receiverId: otherUserId,
+          receiverId: isGroup ? 'group' : otherUserId,
+          recipientIds: isGroup ? conversation!.participants : [otherUserId],
+          senderName: currentUser?.name,
+          senderPhotoUrl: currentUser?.photoUrl,
           text: '${sticker.emoji} Sticker',
           type: 'sticker',
           metadata: {'sticker': sticker.toMap()},
@@ -418,12 +657,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   ) async {
     final expiresAt = _calculateExpiresAt(conversation);
     final isSecret = expiresAt != null;
+    final currentUser = ref.read(currentUserProfileProvider).asData?.value;
+    final isGroup = conversation?.isGroup == true;
 
     await ref
         .read(chatControllerProvider.notifier)
         .sendMessage(
           conversationId: widget.conversationId,
-          receiverId: otherUserId,
+          receiverId: isGroup ? 'group' : otherUserId,
+          recipientIds: isGroup ? conversation!.participants : [otherUserId],
+          senderName: currentUser?.name,
+          senderPhotoUrl: currentUser?.photoUrl,
           text: '🎲 ${game.title}: ${game.question}',
           type: 'game',
           metadata: {'game': game.toMap()},
@@ -433,12 +677,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _scrollToBottom();
   }
 
-  Future<void> _sendCapsule(CapsuleModel capsule, String otherUserId) async {
+  Future<void> _sendCapsule(
+    CapsuleModel capsule,
+    String otherUserId,
+    ConversationModel? conversation,
+  ) async {
+    final currentUser = ref.read(currentUserProfileProvider).asData?.value;
+    final isGroup = conversation?.isGroup == true;
+
     await ref
         .read(chatControllerProvider.notifier)
         .sendMessage(
           conversationId: widget.conversationId,
-          receiverId: otherUserId,
+          receiverId: isGroup ? 'group' : otherUserId,
+          recipientIds: isGroup ? conversation!.participants : [otherUserId],
+          senderName: currentUser?.name,
+          senderPhotoUrl: currentUser?.photoUrl,
           text: '⏳ Capsule: ${capsule.message}',
           type: 'capsule',
           metadata: {'capsule': capsule.toMap()},
@@ -448,7 +702,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   // --- Image & Video Media Sharing ---
 
-  void _showAttachmentOptions(String otherUserId) {
+  void _showAttachmentOptions(
+    String otherUserId,
+    ConversationModel? conversation,
+  ) {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -486,7 +743,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     color: AppColors.primary,
                     onTap: () {
                       Navigator.of(modalContext).pop();
-                      _pickAndSendImage(ImageSource.gallery, otherUserId);
+                      _pickAndSendImage(
+                        ImageSource.gallery,
+                        otherUserId,
+                        conversation,
+                      );
                     },
                   ),
                   _AttachmentOptionTile(
@@ -495,7 +756,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     color: AppColors.accent,
                     onTap: () {
                       Navigator.of(modalContext).pop();
-                      _pickAndSendImage(ImageSource.camera, otherUserId);
+                      _pickAndSendImage(
+                        ImageSource.camera,
+                        otherUserId,
+                        conversation,
+                      );
                     },
                   ),
                   _AttachmentOptionTile(
@@ -504,7 +769,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     color: AppColors.blueGlow,
                     onTap: () {
                       Navigator.of(modalContext).pop();
-                      _pickAndSendVideo(otherUserId);
+                      _pickAndSendVideo(otherUserId, conversation);
                     },
                   ),
                 ],
@@ -517,13 +782,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
   }
 
-  Future<void> _pickAndSendImage(ImageSource source, String otherUserId) async {
+  Future<void> _pickAndSendImage(
+    ImageSource source,
+    String otherUserId,
+    ConversationModel? conversation,
+  ) async {
     final mediaService = ref.read(mediaServiceProvider);
     final file = await mediaService.pickImage(source: source);
     if (file == null) return;
 
     final currentUserId =
         ref.read(authStateChangesProvider).asData?.value?.uid ?? '';
+    final currentUser = ref.read(currentUserProfileProvider).asData?.value;
+    final isGroup = conversation?.isGroup == true;
 
     setState(() {
       _isUploading = true;
@@ -547,7 +818,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             .read(chatControllerProvider.notifier)
             .sendMediaMessage(
               conversationId: widget.conversationId,
-              receiverId: otherUserId,
+              receiverId: isGroup ? 'group' : otherUserId,
+              recipientIds: isGroup ? conversation!.participants : [otherUserId],
+              senderName: currentUser?.name,
+              senderPhotoUrl: currentUser?.photoUrl,
               type: 'image',
               mediaUrl: downloadUrl,
               fileName: file.name,
@@ -567,13 +841,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
-  Future<void> _pickAndSendVideo(String otherUserId) async {
+  Future<void> _pickAndSendVideo(
+    String otherUserId,
+    ConversationModel? conversation,
+  ) async {
     final mediaService = ref.read(mediaServiceProvider);
     final file = await mediaService.pickVideo();
     if (file == null) return;
 
     final currentUserId =
         ref.read(authStateChangesProvider).asData?.value?.uid ?? '';
+    final currentUser = ref.read(currentUserProfileProvider).asData?.value;
+    final isGroup = conversation?.isGroup == true;
 
     setState(() {
       _isUploading = true;
@@ -597,7 +876,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             .read(chatControllerProvider.notifier)
             .sendMediaMessage(
               conversationId: widget.conversationId,
-              receiverId: otherUserId,
+              receiverId: isGroup ? 'group' : otherUserId,
+              recipientIds: isGroup ? conversation!.participants : [otherUserId],
+              senderName: currentUser?.name,
+              senderPhotoUrl: currentUser?.photoUrl,
               type: 'video',
               mediaUrl: downloadUrl,
               fileName: file.name,
@@ -647,17 +929,39 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Widget build(BuildContext context) {
     final currentUserId =
         ref.watch(authStateChangesProvider).asData?.value?.uid ?? '';
+    final singleConvAsync =
+        ref.watch(singleConversationProvider(widget.conversationId));
     final conversationsAsync = ref.watch(userConversationsProvider);
     final conversationList = conversationsAsync.asData?.value ?? [];
-    final conversation =
+    final resolvedConv = singleConvAsync.asData?.value ??
         conversationList
             .where((c) => c.id == widget.conversationId)
-            .firstOrNull ??
+            .firstOrNull;
+
+    if (widget.otherUser == null && resolvedConv == null) {
+      if (singleConvAsync.isLoading || conversationsAsync.isLoading) {
+        return Scaffold(
+          appBar: AppBar(
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back_rounded),
+              onPressed: () => context.pop(),
+            ),
+            title: const Text('Loading chat...'),
+          ),
+          body: const Center(
+            child: CircularProgressIndicator(),
+          ),
+        );
+      }
+    }
+
+    final conversation = resolvedConv ??
         ConversationModel(
           id: widget.conversationId,
+          type: widget.otherUser != null ? 'direct' : 'group',
           participants: widget.otherUser != null
               ? [currentUserId, widget.otherUser!.uid]
-              : [],
+              : [currentUserId],
           participantDetails: widget.otherUser != null
               ? {
                   widget.otherUser!.uid: {
@@ -672,34 +976,66 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           updatedAt: DateTime.now(),
         );
 
+    final isGroup = conversation.isGroup;
+
     final otherUserId =
-        widget.otherUser?.uid ?? conversation.otherParticipantId(currentUserId);
+        widget.otherUser?.uid ??
+        (isGroup ? '' : conversation.otherParticipantId(currentUserId));
     final otherUserName =
         widget.otherUser?.name ??
-        conversation.otherParticipantName(currentUserId);
+        (isGroup
+            ? (conversation.name ?? 'Group')
+            : conversation.otherParticipantName(currentUserId));
 
     final otherUserObj =
         widget.otherUser ??
         ConvoUser(
           uid: otherUserId,
           name: otherUserName,
-          email: conversation.otherParticipantEmail(currentUserId),
-          photoUrl: conversation.otherParticipantPhoto(currentUserId),
+          email: isGroup ? '' : conversation.otherParticipantEmail(currentUserId),
+          photoUrl: isGroup
+              ? conversation.photoUrl
+              : conversation.otherParticipantPhoto(currentUserId),
           createdAt: DateTime.now(),
           updatedAt: DateTime.now(),
         );
 
-    // Live presence stream of other user
-    final otherUserLive = ref
-        .watch(userPresenceProvider(otherUserId))
-        .asData
-        ?.value;
+    // Live presence stream of other user (only for 1-to-1 chats)
+    final otherUserLive = isGroup
+        ? null
+        : ref.watch(userPresenceProvider(otherUserId)).asData?.value;
     final isOnline =
         otherUserLive?.isOnline ?? widget.otherUser?.isOnline ?? false;
 
+    final currentUserProfile =
+        ref.watch(currentUserProfileProvider).asData?.value;
+    final isBlockedByMe =
+        !isGroup && (currentUserProfile?.isUserBlocked(otherUserId) ?? false);
+    final targetUserObj = otherUserLive ?? otherUserObj;
+
+    final canSeePhoto = isGroup ||
+        PrivacyHelper.canViewPhoto(
+          targetUser: targetUserObj,
+          viewerUserId: currentUserId,
+          hasConversation: true,
+        );
+    final canSeeOnline = !isGroup &&
+        PrivacyHelper.canViewOnline(
+          targetUser: targetUserObj,
+          viewerUserId: currentUserId,
+          hasConversation: true,
+        );
+    final canSeeLastSeen = !isGroup &&
+        PrivacyHelper.canViewLastSeen(
+          targetUser: targetUserObj,
+          viewerUserId: currentUserId,
+          hasConversation: true,
+        );
+
     // Check if other user is directly connected via CONVO Nearby Offline
     final nearbyService = ref.watch(nearbyServiceProvider);
-    final isNearbyConnected = nearbyService.isConnectedToUser(otherUserId);
+    final isNearbyConnected =
+        !isGroup && nearbyService.isConnectedToUser(otherUserId);
 
     final messagesAsync = ref.watch(
       conversationCombinedMessagesProvider(widget.conversationId),
@@ -709,149 +1045,475 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
     final replyingMessage = ref.watch(replyingMessageProvider);
 
+    final typingUsers = ref.watch(
+      conversationTypingUsersProvider(widget.conversationId),
+    );
+    final starredItems = ref.watch(starredMessagesProvider);
+    final starredMessageIds = starredItems.map((s) => s.messageId).toSet();
+
     return Scaffold(
-      appBar: AppBar(
-        titleSpacing: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded),
-          onPressed: () => context.pop(),
-        ),
-        title: InkWell(
-          onTap: () => _openChatDetails(otherUserObj),
-          borderRadius: AppRadius.borderMd,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-            child: Row(
-              children: [
-                ConvoAvatar(
-                  initials: otherUserName.isNotEmpty
-                      ? (otherUserName.length >= 2
-                            ? otherUserName.substring(0, 2).toUpperCase()
-                            : otherUserName[0].toUpperCase())
-                      : 'CO',
-                  size: 38,
-                  status: isNearbyConnected
-                      ? ConvoAvatarStatus.online
-                      : (isOnline
-                            ? ConvoAvatarStatus.online
-                            : ConvoAvatarStatus.offline),
+      appBar: _isSelectionMode
+          ? AppBar(
+              leading: IconButton(
+                icon: const Icon(Icons.close_rounded),
+                onPressed: _clearSelection,
+              ),
+              title: Text(
+                '${_selectedMessageIds.length} selected',
+                style: AppTypography.titleMedium.copyWith(
+                  color: context.convoColors.textPrimary,
+                  fontWeight: FontWeight.w700,
                 ),
-                const SizedBox(width: AppSpacing.sm),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Flexible(
-                            child: Text(
-                              otherUserName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: AppTypography.titleMedium.copyWith(
-                                color: context.convoColors.textPrimary,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                          if (conversation.hasMood &&
-                              conversation.moodEmoji != null) ...[
-                            const SizedBox(width: 4),
-                            InkWell(
-                              onTap: () => ChatMoodSheet.show(
-                                context,
-                                conversationId: widget.conversationId,
-                                currentMood: conversation.mood != null
-                                    ? ChatMood.fromMap(conversation.mood!)
-                                    : null,
-                              ),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 5,
-                                  vertical: 1,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: context.colorScheme.primary.withValues(
-                                    alpha: 0.12,
-                                  ),
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: Text(
-                                  conversation.moodEmoji!,
-                                  style: const TextStyle(fontSize: 12),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                      Row(
-                        children: [
-                          Container(
-                            width: 7,
-                            height: 7,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: isNearbyConnected
-                                  ? AppColors.accentPurple
-                                  : (isOnline
-                                        ? AppColors.success
-                                        : Colors.grey),
-                            ),
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            isNearbyConnected
-                                ? 'Nearby Peer'
-                                : (isOnline ? 'Active now' : 'Offline'),
-                            style: AppTypography.labelSmall.copyWith(
-                              color: isNearbyConnected
-                                  ? AppColors.accentPurple
-                                  : (isOnline
-                                        ? AppColors.success
-                                        : context.convoColors.textTertiary),
-                              fontSize: 11,
-                              fontWeight: isNearbyConnected
-                                  ? FontWeight.w600
-                                  : FontWeight.normal,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
+              ),
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.copy_rounded),
+                  tooltip: 'Copy',
+                  onPressed: _copySelectedMessages,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.star_outline_rounded),
+                  tooltip: 'Star',
+                  onPressed: _starSelectedMessages,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.forward_rounded),
+                  tooltip: 'Forward',
+                  onPressed: () {
+                    final firstMsg = _selectedMessages.values.firstOrNull;
+                    if (firstMsg != null) {
+                      ForwardMessageSheet.show(context, firstMsg);
+                    }
+                    _clearSelection();
+                  },
+                ),
+                IconButton(
+                  icon: const Icon(
+                    Icons.delete_outline_rounded,
+                    color: AppColors.error,
                   ),
+                  tooltip: 'Delete',
+                  onPressed: () => _deleteSelectedMessages(currentUserId),
                 ),
               ],
-            ),
-          ),
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(
-              Icons.auto_awesome_rounded,
-              color: AppColors.primary,
-            ),
-            tooltip: 'Chat Magic',
-            onPressed: () =>
-                _openChatMagic(otherUserId, otherUserName, conversation),
-          ),
-          IconButton(
-            icon: const Icon(Icons.phone_outlined),
-            tooltip: 'Voice Call',
-            onPressed: () => _startCall(otherUserObj, isVideo: false),
-          ),
-          IconButton(
-            icon: const Icon(Icons.videocam_outlined),
-            tooltip: 'Video Call',
-            onPressed: () => _startCall(otherUserObj, isVideo: true),
-          ),
-          IconButton(
-            icon: const Icon(Icons.info_outline_rounded),
-            tooltip: 'Conversation Info',
-            onPressed: () => _openChatDetails(otherUserObj),
-          ),
-        ],
-      ),
+            )
+          : _isSearching
+              ? AppBar(
+                  leading: IconButton(
+                    icon: const Icon(Icons.arrow_back_rounded),
+                    onPressed: () {
+                      setState(() {
+                        _isSearching = false;
+                        _searchQuery = '';
+                        _searchController.clear();
+                      });
+                    },
+                  ),
+                  title: TextField(
+                    controller: _searchController,
+                    autofocus: true,
+                    style: AppTypography.bodyLarge.copyWith(
+                      color: context.convoColors.textPrimary,
+                    ),
+                    decoration: InputDecoration(
+                      hintText: 'Search in conversation...',
+                      hintStyle: TextStyle(
+                        color: context.convoColors.textTertiary,
+                      ),
+                      border: InputBorder.none,
+                    ),
+                    onChanged: (val) {
+                      setState(() => _searchQuery = val.trim());
+                    },
+                  ),
+                  actions: [
+                    if (_searchQuery.isNotEmpty)
+                      IconButton(
+                        icon: const Icon(Icons.clear_rounded),
+                        onPressed: () {
+                          setState(() {
+                            _searchQuery = '';
+                            _searchController.clear();
+                          });
+                        },
+                      ),
+                  ],
+                )
+              : AppBar(
+                  titleSpacing: 0,
+                  leading: IconButton(
+                    icon: const Icon(Icons.arrow_back_rounded),
+                    onPressed: () => context.pop(),
+                  ),
+                  title: InkWell(
+                    onTap: () {
+                      if (isGroup) {
+                        context.push(
+                          '/chat/${widget.conversationId}/group_info',
+                        );
+                      } else {
+                        _openChatDetails(otherUserObj);
+                      }
+                    },
+                    borderRadius: AppRadius.borderMd,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 4,
+                        horizontal: 2,
+                      ),
+                      child: Row(
+                        children: [
+                          ConvoAvatar(
+                            initials: isGroup
+                                ? (conversation.name?.isNotEmpty == true
+                                      ? (conversation.name!.length >= 2
+                                            ? conversation.name!
+                                                  .substring(0, 2)
+                                                  .toUpperCase()
+                                            : conversation.name![0]
+                                                  .toUpperCase())
+                                      : 'GP')
+                                : (otherUserName.isNotEmpty
+                                      ? (otherUserName.length >= 2
+                                            ? otherUserName
+                                                  .substring(0, 2)
+                                                  .toUpperCase()
+                                            : otherUserName[0].toUpperCase())
+                                      : 'CO'),
+                            photoUrl: isGroup
+                                ? conversation.photoUrl
+                                : (canSeePhoto ? targetUserObj.photoUrl : null),
+                            size: 38,
+                            status: isGroup
+                                ? ConvoAvatarStatus.none
+                                : (isNearbyConnected
+                                      ? ConvoAvatarStatus.online
+                                      : (canSeeOnline && isOnline
+                                            ? ConvoAvatarStatus.online
+                                            : ConvoAvatarStatus.offline)),
+                          ),
+                          const SizedBox(width: AppSpacing.sm),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Flexible(
+                                      child: Text(
+                                        otherUserName,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style:
+                                            AppTypography.titleMedium.copyWith(
+                                          color: context.convoColors.textPrimary,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ),
+                                    if (conversation.hasMood &&
+                                        conversation.moodEmoji != null) ...[
+                                      const SizedBox(width: 4),
+                                      InkWell(
+                                        onTap: () => ChatMoodSheet.show(
+                                          context,
+                                          conversationId: widget.conversationId,
+                                          currentMood: conversation.mood != null
+                                              ? ChatMood.fromMap(
+                                                  conversation.mood!,
+                                                )
+                                              : null,
+                                        ),
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 5,
+                                            vertical: 1,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: context.colorScheme.primary
+                                                .withValues(alpha: 0.12),
+                                            borderRadius:
+                                                BorderRadius.circular(10),
+                                          ),
+                                          child: Text(
+                                            conversation.moodEmoji!,
+                                            style:
+                                                const TextStyle(fontSize: 12),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                                if (typingUsers.isNotEmpty)
+                                  Text(
+                                    '${typingUsers.join(', ')} typing...',
+                                    style: AppTypography.labelSmall.copyWith(
+                                      color: context.colorScheme.primary,
+                                      fontWeight: FontWeight.w600,
+                                      fontStyle: FontStyle.italic,
+                                      fontSize: 11,
+                                    ),
+                                  )
+                                else if (isGroup)
+                                  Text(
+                                    '${conversation.participants.length} members',
+                                    style: AppTypography.labelSmall.copyWith(
+                                      color: context.convoColors.textTertiary,
+                                      fontSize: 11,
+                                    ),
+                                  )
+                                else
+                                  Row(
+                                    children: [
+                                      Container(
+                                        width: 7,
+                                        height: 7,
+                                        decoration: BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          color: isBlockedByMe
+                                              ? AppColors.error
+                                              : (isNearbyConnected
+                                                    ? AppColors.accentPurple
+                                                    : (canSeeOnline && isOnline
+                                                          ? AppColors.success
+                                                          : Colors.grey)),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        isBlockedByMe
+                                            ? 'Blocked'
+                                            : (isNearbyConnected
+                                                  ? 'Nearby Peer'
+                                                  : (canSeeOnline && isOnline
+                                                        ? 'Active now'
+                                                        : (canSeeLastSeen &&
+                                                                targetUserObj
+                                                                        .lastSeen !=
+                                                                    null
+                                                            ? 'Last seen ${DateFormatter.formatTimeAgo(targetUserObj.lastSeen!)}'
+                                                            : 'Offline'))),
+                                        style:
+                                            AppTypography.labelSmall.copyWith(
+                                          color: isBlockedByMe
+                                              ? AppColors.error
+                                              : (isNearbyConnected
+                                                    ? AppColors.accentPurple
+                                                    : (canSeeOnline && isOnline
+                                                          ? AppColors.success
+                                                          : context
+                                                              .convoColors
+                                                              .textTertiary)),
+                                          fontSize: 11,
+                                          fontWeight:
+                                              isNearbyConnected || isBlockedByMe
+                                                  ? FontWeight.w600
+                                                  : FontWeight.normal,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  actions: [
+                    IconButton(
+                      icon: const Icon(Icons.search_rounded),
+                      tooltip: 'Search in Conversation',
+                      onPressed: () => setState(() => _isSearching = true),
+                    ),
+                    IconButton(
+                      icon: const Icon(
+                        Icons.auto_awesome_rounded,
+                        color: AppColors.primary,
+                      ),
+                      tooltip: 'Chat Magic',
+                      onPressed: () => _openChatMagic(
+                        otherUserId,
+                        otherUserName,
+                        conversation,
+                      ),
+                    ),
+                    if (!isGroup) ...[
+                      IconButton(
+                        icon: const Icon(Icons.phone_outlined),
+                        tooltip: 'Voice Call',
+                        onPressed: () =>
+                            _startCall(otherUserObj, isVideo: false),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.videocam_outlined),
+                        tooltip: 'Video Call',
+                        onPressed: () =>
+                            _startCall(otherUserObj, isVideo: true),
+                      ),
+                    ],
+                    IconButton(
+                      icon: const Icon(Icons.info_outline_rounded),
+                      tooltip: isGroup ? 'Group Info' : 'Conversation Info',
+                      onPressed: () {
+                        if (isGroup) {
+                          context.push(
+                            '/chat/${widget.conversationId}/group_info',
+                          );
+                        } else {
+                          _openChatDetails(otherUserObj);
+                        }
+                      },
+                    ),
+                    PopupMenuButton<String>(
+                      icon: const Icon(Icons.more_vert_rounded),
+                      onSelected: (value) async {
+                        if (value == 'search') {
+                          setState(() => _isSearching = true);
+                        } else if (value == 'gallery') {
+                          context.push(
+                            '/chat/${widget.conversationId}/gallery',
+                          );
+                        } else if (value == 'starred') {
+                          context.push('/starred_messages');
+                        } else if (value == 'group_info') {
+                          context.push(
+                            '/chat/${widget.conversationId}/group_info',
+                          );
+                        } else if (value == 'toggle_mute') {
+                          final isMuted =
+                              conversation.isMutedFor(currentUserId);
+                          await ref
+                              .read(chatControllerProvider.notifier)
+                              .toggleGroupMute(
+                                conversationId: widget.conversationId,
+                                mute: !isMuted,
+                              );
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  isMuted
+                                      ? 'Group notifications unmuted'
+                                      : 'Group notifications muted',
+                                ),
+                                behavior: SnackBarBehavior.floating,
+                              ),
+                            );
+                          }
+                        } else if (value == 'toggle_block') {
+                          final messenger = ScaffoldMessenger.of(context);
+                          if (isBlockedByMe) {
+                            await ref
+                                .read(profileControllerProvider.notifier)
+                                .unblockUser(otherUserId);
+                            messenger.showSnackBar(
+                              const SnackBar(
+                                content: Text('Contact unblocked.'),
+                              ),
+                            );
+                          } else {
+                            await ref
+                                .read(profileControllerProvider.notifier)
+                                .blockUser(otherUserId);
+                            messenger.showSnackBar(
+                              const SnackBar(
+                                content: Text('Contact blocked.'),
+                              ),
+                            );
+                          }
+                        }
+                      },
+                      itemBuilder: (context) => [
+                        const PopupMenuItem(
+                          value: 'search',
+                          child: Row(
+                            children: [
+                              Icon(Icons.search_rounded, size: 20),
+                              SizedBox(width: 8),
+                              Text('Search'),
+                            ],
+                          ),
+                        ),
+                        const PopupMenuItem(
+                          value: 'gallery',
+                          child: Row(
+                            children: [
+                              Icon(Icons.perm_media_outlined, size: 20),
+                              SizedBox(width: 8),
+                              Text('Media, Links & Files'),
+                            ],
+                          ),
+                        ),
+                        const PopupMenuItem(
+                          value: 'starred',
+                          child: Row(
+                            children: [
+                              Icon(Icons.star_outline_rounded, size: 20),
+                              SizedBox(width: 8),
+                              Text('Starred Messages'),
+                            ],
+                          ),
+                        ),
+                        if (isGroup) ...[
+                          const PopupMenuItem(
+                            value: 'group_info',
+                            child: Row(
+                              children: [
+                                Icon(Icons.info_outline_rounded, size: 20),
+                                SizedBox(width: 8),
+                                Text('Group Info'),
+                              ],
+                            ),
+                          ),
+                          PopupMenuItem(
+                            value: 'toggle_mute',
+                            child: Row(
+                              children: [
+                                Icon(
+                                  conversation.isMutedFor(currentUserId)
+                                      ? Icons.notifications_active_rounded
+                                      : Icons.notifications_off_rounded,
+                                  size: 20,
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  conversation.isMutedFor(currentUserId)
+                                      ? 'Unmute Notifications'
+                                      : 'Mute Notifications',
+                                ),
+                              ],
+                            ),
+                          ),
+                        ] else ...[
+                          PopupMenuItem(
+                            value: 'toggle_block',
+                            child: Row(
+                              children: [
+                                Icon(
+                                  isBlockedByMe
+                                      ? Icons.check_circle_outline_rounded
+                                      : Icons.block_rounded,
+                                  color: isBlockedByMe
+                                      ? AppColors.primary
+                                      : AppColors.error,
+                                  size: 20,
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  isBlockedByMe
+                                      ? 'Unblock Contact'
+                                      : 'Block Contact',
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
+                ),
       body: SafeArea(
         child: Column(
           children: [
@@ -1019,6 +1681,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   ),
                 ),
                 data: (messages) {
+                  final displayedMessages = _searchQuery.isEmpty
+                      ? messages
+                      : messages
+                          .where((m) =>
+                              m.text
+                                  .toLowerCase()
+                                  .contains(_searchQuery.toLowerCase()) ||
+                              (m.senderName
+                                      ?.toLowerCase()
+                                      .contains(_searchQuery.toLowerCase()) ??
+                                  false))
+                          .toList();
+
                   if (messages.isEmpty) {
                     return Center(
                       child: Padding(
@@ -1043,7 +1718,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             ),
                             const SizedBox(height: AppSpacing.md),
                             Text(
-                              'Say Hello!',
+                              isGroup ? 'Welcome!' : 'Say Hello!',
                               style: AppTypography.headlineMedium.copyWith(
                                 color: context.convoColors.textPrimary,
                                 fontWeight: FontWeight.w700,
@@ -1051,11 +1726,46 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             ),
                             const SizedBox(height: AppSpacing.xs),
                             Text(
-                              'No messages in this encrypted conversation yet.\nSend text, photos, videos or voice messages to start chatting with $otherUserName.',
+                              isGroup
+                                  ? 'No messages in this group yet.\nSend photos, voice messages, or text to start chatting with the group!'
+                                  : 'No messages in this encrypted conversation yet.\nSend text, photos, videos or voice messages to start chatting with $otherUserName.',
                               textAlign: TextAlign.center,
                               style: AppTypography.bodySmall.copyWith(
                                 color: context.convoColors.textSecondary,
                                 height: 1.4,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }
+
+                  if (_searchQuery.isNotEmpty && displayedMessages.isEmpty) {
+                    return Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(AppSpacing.xl),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.search_off_rounded,
+                              size: 48,
+                              color: context.convoColors.textTertiary,
+                            ),
+                            const SizedBox(height: AppSpacing.sm),
+                            Text(
+                              'No matching messages',
+                              style: AppTypography.titleMedium.copyWith(
+                                color: context.convoColors.textPrimary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'No results found for "$_searchQuery"',
+                              style: AppTypography.bodySmall.copyWith(
+                                color: context.convoColors.textSecondary,
                               ),
                             ),
                           ],
@@ -1076,9 +1786,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     padding: const EdgeInsets.symmetric(
                       vertical: AppSpacing.sm,
                     ),
-                    itemCount: messages.length + extraCount,
+                    itemCount: displayedMessages.length + extraCount,
                     itemBuilder: (context, index) {
-                      if (index == messages.length) {
+                      if (index == displayedMessages.length) {
                         if (showLoadingMore) {
                           return const Padding(
                             padding: EdgeInsets.symmetric(
@@ -1125,14 +1835,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         }
                       }
 
-                      final message = messages[index];
+                      final message = displayedMessages[index];
                       final isMe = message.senderId == currentUserId;
+                      final showSenderName =
+                          isGroup &&
+                          !isMe &&
+                          (index == displayedMessages.length - 1 ||
+                              displayedMessages[index + 1].senderId !=
+                                  message.senderId);
 
                       final bool showDateHeader;
-                      if (index == messages.length - 1) {
+                      if (index == displayedMessages.length - 1) {
                         showDateHeader = true;
                       } else {
-                        final previousMessage = messages[index + 1];
+                        final previousMessage = displayedMessages[index + 1];
                         showDateHeader =
                             message.createdAt.day !=
                                 previousMessage.createdAt.day ||
@@ -1175,6 +1891,32 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             message: message,
                             isMe: isMe,
                             currentUserId: currentUserId,
+                            showSenderName: showSenderName,
+                            isStarred: starredMessageIds.contains(message.id),
+                            isSelected:
+                                _selectedMessageIds.contains(message.id),
+                            isSelectionMode: _isSelectionMode,
+                            onToggleSelect: () =>
+                                _toggleMessageSelection(message),
+                            onSelectMessage: () =>
+                                _startSelectionWith(message),
+                            onToggleStar: () => _toggleStarMessage(message),
+                            onReplyTap: (replyId) =>
+                                _jumpToMessage(replyId, messages),
+                            onDeleteForMe: () => ref
+                                .read(chatControllerProvider.notifier)
+                                .deleteMessageForMe(
+                                  conversationId: widget.conversationId,
+                                  messageId: message.id,
+                                ),
+                            onDeleteForEveryone: isMe
+                                ? () => ref
+                                    .read(chatControllerProvider.notifier)
+                                    .deleteMessageForEveryone(
+                                      conversationId: widget.conversationId,
+                                      messageId: message.id,
+                                    )
+                                : null,
                             onReply: () {
                               ref
                                   .read(replyingMessageProvider.notifier)
@@ -1192,11 +1934,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             onDelete: () {
                               ref
                                   .read(chatControllerProvider.notifier)
-                                  .deleteMessage(
+                                  .deleteMessageForMe(
                                     conversationId: widget.conversationId,
                                     messageId: message.id,
                                   );
                             },
+                            onForward: () =>
+                                ForwardMessageSheet.show(context, message),
                           ),
                         ],
                       );
@@ -1205,6 +1949,51 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 },
               ),
             ),
+
+            // Floating Typing Indicator Pill
+            if (typingUsers.isNotEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.lg,
+                  vertical: 4,
+                ),
+                alignment: Alignment.centerLeft,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: context.convoColors.surfaceSubtle,
+                    borderRadius: AppRadius.borderPill,
+                    border: Border.all(
+                      color: context.convoColors.cardBorder,
+                      width: 0.8,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const SizedBox(
+                        width: 10,
+                        height: 10,
+                        child: CircularProgressIndicator(strokeWidth: 1.5),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        '${typingUsers.join(', ')} typing...',
+                        style: AppTypography.labelSmall.copyWith(
+                          color: context.colorScheme.primary,
+                          fontStyle: FontStyle.italic,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
 
             // Replying Quote Banner
             if (replyingMessage != null)
@@ -1240,7 +2029,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           Text(
                             replyingMessage.senderId == currentUserId
                                 ? 'Replying to Yourself'
-                                : 'Replying to $otherUserName',
+                                : 'Replying to ${replyingMessage.senderName ?? otherUserName}',
                             style: AppTypography.labelSmall.copyWith(
                               color: context.colorScheme.primary,
                               fontWeight: FontWeight.w700,
@@ -1269,8 +2058,51 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 ),
               ),
 
-            // Voice Effect Preview Bar OR Voice Recording Bar OR Normal Composer
-            if (_recordedVoicePath != null)
+            // Blocked Banner OR Voice Effect Preview Bar OR Voice Recording Bar OR Normal Composer
+            if (isBlockedByMe)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.lg,
+                  vertical: AppSpacing.md,
+                ),
+                color: context.convoColors.surfaceSubtle,
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.block_rounded,
+                      color: AppColors.error,
+                      size: 20,
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                    Expanded(
+                      child: Text(
+                        'You have blocked this contact.',
+                        style: AppTypography.bodySmall.copyWith(
+                          color: context.convoColors.textSecondary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () async {
+                        final messenger = ScaffoldMessenger.of(context);
+                        await ref
+                            .read(profileControllerProvider.notifier)
+                            .unblockUser(otherUserId);
+                        messenger.showSnackBar(
+                          const SnackBar(
+                            content: Text('Contact unblocked.'),
+                            behavior: SnackBarBehavior.floating,
+                          ),
+                        );
+                      },
+                      child: const Text('Unblock'),
+                    ),
+                  ],
+                ),
+              )
+            else if (_recordedVoicePath != null)
               VoiceEffectPreviewBar(
                 filePath: _recordedVoicePath!,
                 durationSeconds: _recordedVoiceDuration,
@@ -1442,7 +2274,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               size: 24,
             ),
             tooltip: 'Add attachment',
-            onPressed: () => _showAttachmentOptions(otherUserId),
+            onPressed: () =>
+                _showAttachmentOptions(otherUserId, conversation),
           ),
 
           // Chat Magic Hub Button
