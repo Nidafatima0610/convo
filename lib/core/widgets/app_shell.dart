@@ -67,14 +67,9 @@ class _ConvoBottomNavBar extends StatelessWidget {
       activeIcon: Icons.phone_rounded,
     ),
     _NavItemData(
-      label: AppStrings.navDiscover,
-      icon: Icons.explore_outlined,
-      activeIcon: Icons.explore_rounded,
-    ),
-    _NavItemData(
-      label: AppStrings.navProfile,
-      icon: Icons.person_outline_rounded,
-      activeIcon: Icons.person_rounded,
+      label: AppStrings.navSettings,
+      icon: Icons.settings_outlined,
+      activeIcon: Icons.settings_rounded,
     ),
   ];
 

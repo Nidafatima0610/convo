@@ -196,13 +196,28 @@ class OfflineSyncService {
       'reactions': {},
     }, SetOptions(merge: true));
 
-    // Update conversation metadata
-    await conversationDoc.update({
-      'lastMessage': m.text,
-      'lastMessageAt': Timestamp.fromDate(m.createdAt),
-      'lastMessageSenderId': m.senderId,
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
+    // Update or create conversation metadata
+    final convSnap = await conversationDoc.get();
+    if (!convSnap.exists || convSnap.data() == null) {
+      await conversationDoc.set({
+        'id': m.conversationId,
+        'participants': [m.senderId, m.receiverId],
+        'lastMessage': m.text,
+        'lastMessageAt': Timestamp.fromDate(m.createdAt),
+        'lastMessageSenderId': m.senderId,
+        'unreadCounts': {m.senderId: 0, m.receiverId: 1},
+        'type': 'direct',
+        'createdAt': Timestamp.fromDate(m.createdAt),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } else {
+      await conversationDoc.update({
+        'lastMessage': m.text,
+        'lastMessageAt': Timestamp.fromDate(m.createdAt),
+        'lastMessageSenderId': m.senderId,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    }
   }
 
   void dispose() {

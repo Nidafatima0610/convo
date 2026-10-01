@@ -205,8 +205,8 @@ class _StarredMessagesScreenState extends ConsumerState<StarredMessagesScreen> {
                       return _StarredItemCard(
                         item: item,
                         onUnstar: () => ref
-                            .read(chatPreferencesServiceProvider)
-                            .unstarMessage(item.messageId),
+                            .read(starredMessagesProvider.notifier)
+                            .unstar(item.messageId),
                         onTap: () {
                           if (item.conversationId.isNotEmpty) {
                             context.push('/chat/${item.conversationId}');

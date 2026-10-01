@@ -115,6 +115,13 @@ class _CallsScreenState extends ConsumerState<CallsScreen> {
                       subtitle: _selectedFilterIndex == 1
                           ? 'You have answered all previous calls.'
                           : AppStrings.callsEmptySubtitle,
+                      actionLabel: _selectedFilterIndex == 1
+                          ? null
+                          : AppStrings.newCall,
+                      actionIcon: Icons.add_call,
+                      onActionPressed: _selectedFilterIndex == 1
+                          ? null
+                          : () => _showStartCallDialog(context),
                       badge: const ConvoBadge(
                         label: 'END-TO-END ENCRYPTED',
                         variant: ConvoBadgeVariant.primary,
@@ -225,6 +232,106 @@ class _CallsScreenState extends ConsumerState<CallsScreen> {
               ),
             ),
           ],
+        ),
+      ),
+      floatingActionButton: Container(
+        decoration: BoxDecoration(
+          borderRadius: AppRadius.borderLg,
+          gradient: AppColors.brandGradient,
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.primary.withValues(alpha: 0.35),
+              blurRadius: 16,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: FloatingActionButton.extended(
+          heroTag: 'calls_new_call_fab',
+          onPressed: () => _showStartCallDialog(context),
+          icon: const Icon(Icons.add_call, size: 20, color: Colors.white),
+          label: Text(
+            AppStrings.newCall,
+            style: AppTypography.labelLarge.copyWith(
+              color: Colors.white,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          highlightElevation: 0,
+          shape: RoundedRectangleBorder(borderRadius: AppRadius.borderLg),
+        ),
+      ),
+    );
+  }
+
+  void _showStartCallDialog(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: context.convoColors.cardBackground,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: AppRadius.radiusXl),
+      ),
+      builder: (sheetCtx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.xl),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(AppSpacing.sm),
+                    decoration: BoxDecoration(
+                      color: context.colorScheme.primary.withValues(alpha: 0.12),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.phone_in_talk_rounded,
+                      color: context.colorScheme.primary,
+                      size: 24,
+                    ),
+                  ),
+                  const SizedBox(width: AppSpacing.md),
+                  Text(
+                    'CONVO Calling',
+                    style: AppTypography.titleLarge.copyWith(
+                      color: context.convoColors.textPrimary,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.md),
+              Text(
+                'Direct HD voice and encrypted video calling will be activated in an upcoming update.\n\n'
+                '• End-to-end encrypted audio & video channels\n'
+                '• Adaptive bitrate for low bandwidth networks\n'
+                '• Works over Wi-Fi, cellular data, and local mesh',
+                style: AppTypography.bodyMedium.copyWith(
+                  color: context.convoColors.textSecondary,
+                  height: 1.5,
+                ),
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () => Navigator.of(sheetCtx).pop(),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: context.colorScheme.primary,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: AppRadius.borderMd,
+                    ),
+                  ),
+                  child: const Text('Understood'),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

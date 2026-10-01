@@ -146,8 +146,8 @@ class ArchivedChatsScreen extends ConsumerWidget {
                 ),
                 onDismissed: (_) {
                   ref
-                      .read(chatPreferencesServiceProvider)
-                      .toggleArchiveChat(conversation.id);
+                      .read(archivedChatIdsProvider.notifier)
+                      .toggleArchive(conversation.id);
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
                       content: Text('Unarchived $name'),
@@ -218,8 +218,8 @@ class ArchivedChatsScreen extends ConsumerWidget {
                         tooltip: 'Unarchive',
                         onPressed: () {
                           ref
-                              .read(chatPreferencesServiceProvider)
-                              .toggleArchiveChat(conversation.id);
+                              .read(archivedChatIdsProvider.notifier)
+                              .toggleArchive(conversation.id);
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
                               content: Text('Unarchived $name'),

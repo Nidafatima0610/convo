@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
 
 import '../../features/auth/domain/models/convo_user.dart';
 import '../../features/chats/domain/models/conversation_model.dart';
@@ -140,6 +141,9 @@ class ChatService {
         return snapshot.docs
             .map((doc) => MessageModel.fromFirestore(doc))
             .toList();
+      }).handleError((error) {
+        debugPrint('messagesStream notice for $conversationId: $error');
+        return <MessageModel>[];
       });
     } catch (_) {
       return const Stream.empty();
@@ -306,40 +310,70 @@ class ChatService {
       'createdAt': FieldValue.serverTimestamp(),
     });
 
-    // 2. Update conversation summary
+    // 2. Update or create conversation summary
     final conversationDocRef = _conversationsRef.doc(conversationId);
-    final Map<String, dynamic> convUpdates = {
-      'lastMessage': text.trim(),
-      'lastMessageAt': FieldValue.serverTimestamp(),
-      'lastMessageSenderId': senderId,
-      'updatedAt': FieldValue.serverTimestamp(),
-      'typing.$senderId': FieldValue.delete(),
-    };
+    final convDoc = await conversationDocRef.get();
 
-    var effectiveRecipients = recipientIds;
-    if (receiverId == 'group' &&
-        (effectiveRecipients == null || effectiveRecipients.isEmpty)) {
-      final convDoc = await _conversationsRef.doc(conversationId).get();
-      if (convDoc.exists && convDoc.data() != null) {
+    if (!convDoc.exists || convDoc.data() == null) {
+      final isGroup = receiverId == 'group';
+      final participants = isGroup
+          ? (recipientIds ?? [senderId])
+          : [senderId, receiverId];
+      final unreadMap = <String, int>{};
+      for (final p in participants) {
+        unreadMap[p] = (p == senderId) ? 0 : 1;
+      }
+
+      batch.set(conversationDocRef, {
+        'id': conversationId,
+        'participants': participants,
+        'participantDetails': {
+          senderId: {
+            'name': senderName ?? 'CONVO User',
+            'photoUrl': senderPhotoUrl,
+          },
+        },
+        'lastMessage': text.trim(),
+        'lastMessageAt': FieldValue.serverTimestamp(),
+        'lastMessageSenderId': senderId,
+        'unreadCounts': unreadMap,
+        'type': isGroup ? 'group' : 'direct',
+        'admins': isGroup ? [senderId] : const [],
+        'createdBy': isGroup ? senderId : null,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } else {
+      final Map<String, dynamic> convUpdates = {
+        'lastMessage': text.trim(),
+        'lastMessageAt': FieldValue.serverTimestamp(),
+        'lastMessageSenderId': senderId,
+        'updatedAt': FieldValue.serverTimestamp(),
+        'typing.$senderId': FieldValue.delete(),
+      };
+
+      var effectiveRecipients = recipientIds;
+      if (receiverId == 'group' &&
+          (effectiveRecipients == null || effectiveRecipients.isEmpty)) {
         final rawParts = convDoc.data()!['participants'];
         if (rawParts is List) {
           effectiveRecipients =
               rawParts.map((e) => e.toString()).toList();
         }
       }
-    }
 
-    if (effectiveRecipients != null && effectiveRecipients.isNotEmpty) {
-      for (final recId in effectiveRecipients) {
-        if (recId != senderId && recId.isNotEmpty) {
-          convUpdates['unreadCounts.$recId'] = FieldValue.increment(1);
+      if (effectiveRecipients != null && effectiveRecipients.isNotEmpty) {
+        for (final recId in effectiveRecipients) {
+          if (recId != senderId && recId.isNotEmpty) {
+            convUpdates['unreadCounts.$recId'] = FieldValue.increment(1);
+          }
         }
+      } else if (receiverId.isNotEmpty && receiverId != 'group') {
+        convUpdates['unreadCounts.$receiverId'] = FieldValue.increment(1);
       }
-    } else if (receiverId.isNotEmpty && receiverId != 'group') {
-      convUpdates['unreadCounts.$receiverId'] = FieldValue.increment(1);
-    }
 
-    batch.update(conversationDocRef, convUpdates);
+      batch.update(conversationDocRef, convUpdates);
+    }
 
     await batch.commit();
     return message;
@@ -432,38 +466,68 @@ class ChatService {
     }
 
     final conversationDocRef = _conversationsRef.doc(conversationId);
-    final Map<String, dynamic> convUpdates = {
-      'lastMessage': previewText,
-      'lastMessageAt': FieldValue.serverTimestamp(),
-      'lastMessageSenderId': senderId,
-      'updatedAt': FieldValue.serverTimestamp(),
-      'typing.$senderId': FieldValue.delete(),
-    };
+    final convDoc = await conversationDocRef.get();
 
-    var effectiveRecipients = recipientIds;
-    if (receiverId == 'group' &&
-        (effectiveRecipients == null || effectiveRecipients.isEmpty)) {
-      final convDoc = await _conversationsRef.doc(conversationId).get();
-      if (convDoc.exists && convDoc.data() != null) {
+    if (!convDoc.exists || convDoc.data() == null) {
+      final isGroup = receiverId == 'group';
+      final participants = isGroup
+          ? (recipientIds ?? [senderId])
+          : [senderId, receiverId];
+      final unreadMap = <String, int>{};
+      for (final p in participants) {
+        unreadMap[p] = (p == senderId) ? 0 : 1;
+      }
+
+      batch.set(conversationDocRef, {
+        'id': conversationId,
+        'participants': participants,
+        'participantDetails': {
+          senderId: {
+            'name': senderName ?? 'CONVO User',
+            'photoUrl': senderPhotoUrl,
+          },
+        },
+        'lastMessage': previewText,
+        'lastMessageAt': FieldValue.serverTimestamp(),
+        'lastMessageSenderId': senderId,
+        'unreadCounts': unreadMap,
+        'type': isGroup ? 'group' : 'direct',
+        'admins': isGroup ? [senderId] : const [],
+        'createdBy': isGroup ? senderId : null,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } else {
+      final Map<String, dynamic> convUpdates = {
+        'lastMessage': previewText,
+        'lastMessageAt': FieldValue.serverTimestamp(),
+        'lastMessageSenderId': senderId,
+        'updatedAt': FieldValue.serverTimestamp(),
+        'typing.$senderId': FieldValue.delete(),
+      };
+
+      var effectiveRecipients = recipientIds;
+      if (receiverId == 'group' &&
+          (effectiveRecipients == null || effectiveRecipients.isEmpty)) {
         final rawParts = convDoc.data()!['participants'];
         if (rawParts is List) {
           effectiveRecipients =
               rawParts.map((e) => e.toString()).toList();
         }
       }
-    }
 
-    if (effectiveRecipients != null && effectiveRecipients.isNotEmpty) {
-      for (final recId in effectiveRecipients) {
-        if (recId != senderId && recId.isNotEmpty) {
-          convUpdates['unreadCounts.$recId'] = FieldValue.increment(1);
+      if (effectiveRecipients != null && effectiveRecipients.isNotEmpty) {
+        for (final recId in effectiveRecipients) {
+          if (recId != senderId && recId.isNotEmpty) {
+            convUpdates['unreadCounts.$recId'] = FieldValue.increment(1);
+          }
         }
+      } else if (receiverId.isNotEmpty && receiverId != 'group') {
+        convUpdates['unreadCounts.$receiverId'] = FieldValue.increment(1);
       }
-    } else if (receiverId.isNotEmpty && receiverId != 'group') {
-      convUpdates['unreadCounts.$receiverId'] = FieldValue.increment(1);
-    }
 
-    batch.update(conversationDocRef, convUpdates);
+      batch.update(conversationDocRef, convUpdates);
+    }
 
     await batch.commit();
     return message;

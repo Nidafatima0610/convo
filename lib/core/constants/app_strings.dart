@@ -16,6 +16,7 @@ class AppStrings {
   static const String navCalls = 'Calls';
   static const String navDiscover = 'Discover';
   static const String navProfile = 'Profile';
+  static const String navSettings = 'Settings';
 
   // Chats Screen
   static const String chatsTitle = 'Chats';
@@ -91,6 +92,10 @@ class AppStrings {
   static const String notificationsDesc = 'Message alerts, sound, vibration';
   static const String privacy = 'Privacy';
   static const String privacyDesc = 'Read receipts, last seen, mesh visibility';
+  static const String chatSettings = 'Chat Settings';
+  static const String chatSettingsDesc = 'Enter to send, media auto-download, wallpapers';
+  static const String secretChat = 'Secret Chat';
+  static const String secretChatDesc = 'Self-destruct timer, screenshot alerts, zero-knowledge';
   static const String security = 'Security';
   static const String securityDesc =
       'Screen lock, biometric auth, encryption keys';

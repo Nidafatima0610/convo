@@ -11,6 +11,7 @@ class ConvoAppBar extends StatelessWidget implements PreferredSizeWidget {
   const ConvoAppBar({
     super.key,
     this.title,
+    this.titleWidget,
     this.showBrand = false,
     this.subtitle,
     this.actions,
@@ -20,6 +21,7 @@ class ConvoAppBar extends StatelessWidget implements PreferredSizeWidget {
   });
 
   final String? title;
+  final Widget? titleWidget;
   final bool showBrand;
   final String? subtitle;
   final List<Widget>? actions;
@@ -37,9 +39,8 @@ class ConvoAppBar extends StatelessWidget implements PreferredSizeWidget {
       centerTitle: centerTitle,
       leading: leading,
       titleSpacing: leading != null ? 0 : AppSpacing.lg,
-      title: showBrand
-          ? _buildBrandTitle(context)
-          : _buildStandardTitle(context),
+      title: titleWidget ??
+          (showBrand ? _buildBrandTitle(context) : _buildStandardTitle(context)),
       actions: [
         ...?actions,
         const SizedBox(width: AppSpacing.sm),

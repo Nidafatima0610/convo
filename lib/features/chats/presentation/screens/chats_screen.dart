@@ -2,13 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../../core/constants/app_constants.dart';
 import '../../../../core/constants/app_strings.dart';
 import '../../../../core/routes/app_routes.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_radius.dart';
 import '../../../../core/theme/app_spacing.dart';
 import '../../../../core/theme/app_typography.dart';
-import '../../../../core/utils/date_formatter.dart';
 import '../../../../core/utils/extensions.dart';
 import '../../../../core/widgets/convo_app_bar.dart';
 import '../../../../core/widgets/convo_avatar.dart';
@@ -21,6 +21,7 @@ import 'package:flutter/services.dart';
 import '../../domain/models/conversation_model.dart';
 import '../providers/chat_providers.dart';
 import '../widgets/user_search_modal.dart';
+import '../widgets/chat_preview_tile.dart';
 import '../../../../services/local_storage/chat_preferences_service.dart';
 
 class ChatsScreen extends ConsumerStatefulWidget {
@@ -58,14 +59,77 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
 
     final otherUser = ConvoUser(
       uid: otherId,
-      name: otherDetails?['name'] as String? ?? 'CONVO User',
+      name: otherDetails?['name'] as String? ??
+          conversation.otherParticipantName(currentUserId),
       email: otherDetails?['email'] as String? ?? '',
-      photoUrl: otherDetails?['photoUrl'] as String?,
+      photoUrl: otherDetails?['photoUrl'] as String? ??
+          conversation.otherParticipantPhoto(currentUserId),
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
     );
 
     context.push('/chat/${conversation.id}', extra: otherUser);
+  }
+
+  void _confirmDeleteConversation(
+    BuildContext context,
+    ConversationModel conversation,
+    String displayName,
+  ) {
+    HapticFeedback.mediumImpact();
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: context.convoColors.cardBackground,
+        shape: RoundedRectangleBorder(borderRadius: AppRadius.borderXl),
+        title: Text(
+          'Delete Conversation?',
+          style: AppTypography.titleLarge.copyWith(
+            color: context.convoColors.textPrimary,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        content: Text(
+          'Are you sure you want to delete this conversation with "$displayName"? Messages will be removed.',
+          style: AppTypography.bodyMedium.copyWith(
+            color: context.convoColors.textSecondary,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.of(dialogCtx).pop();
+              ref
+                  .read(chatControllerProvider.notifier)
+                  .deleteConversation(conversation.id);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Deleted conversation with $displayName'),
+                  behavior: SnackBarBehavior.floating,
+                  action: SnackBarAction(
+                    label: 'Undo',
+                    onPressed: () {
+                      ref
+                          .read(deletedChatIdsProvider.notifier)
+                          .restoreChat(conversation.id);
+                    },
+                  ),
+                ),
+              );
+            },
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.error,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showConversationOptions(
@@ -74,6 +138,7 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
     bool isPinned,
     bool isArchived,
     bool isMuted,
+    String displayName,
     String currentUserId,
   ) {
     HapticFeedback.mediumImpact();
@@ -105,8 +170,8 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
               onTap: () {
                 Navigator.of(sheetCtx).pop();
                 ref
-                    .read(chatPreferencesServiceProvider)
-                    .togglePinChat(conversation.id);
+                    .read(pinnedChatIdsProvider.notifier)
+                    .togglePin(conversation.id);
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
                     content: Text(
@@ -131,8 +196,8 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
               onTap: () {
                 Navigator.of(sheetCtx).pop();
                 ref
-                    .read(chatPreferencesServiceProvider)
-                    .toggleArchiveChat(conversation.id);
+                    .read(archivedChatIdsProvider.notifier)
+                    .toggleArchive(conversation.id);
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
                     content: Text(
@@ -174,6 +239,20 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
                     .markAsRead(conversation.id);
               },
             ),
+            ListTile(
+              leading: const Icon(
+                Icons.delete_outline_rounded,
+                color: AppColors.error,
+              ),
+              title: const Text(
+                'Delete Conversation',
+                style: TextStyle(color: AppColors.error),
+              ),
+              onTap: () {
+                Navigator.of(sheetCtx).pop();
+                _confirmDeleteConversation(context, conversation, displayName);
+              },
+            ),
           ],
         ),
       ),
@@ -184,11 +263,90 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
   Widget build(BuildContext context) {
     final currentUserId =
         ref.watch(authStateChangesProvider).asData?.value?.uid ?? '';
+    final currentUserProfile =
+        ref.watch(currentUserProfileProvider).asData?.value;
     final conversationsAsync = ref.watch(userConversationsProvider);
+
+    final currentUserInitials = currentUserProfile?.initials ??
+        (currentUserProfile?.name.isNotEmpty == true
+            ? currentUserProfile!.name[0].toUpperCase()
+            : 'CO');
 
     return Scaffold(
       appBar: ConvoAppBar(
-        showBrand: true,
+        leading: Padding(
+          padding: const EdgeInsets.only(left: AppSpacing.md),
+          child: Center(
+            child: Semantics(
+              label: 'View profile',
+              button: true,
+              child: InkWell(
+                onTap: () => context.push(AppRoutes.profile),
+                borderRadius: BorderRadius.circular(22),
+                child: Container(
+                  padding: const EdgeInsets.all(2),
+                  decoration: const BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: AppColors.brandGradient,
+                  ),
+                  child: ConvoAvatar(
+                    initials: currentUserInitials,
+                    photoUrl: currentUserProfile?.photoUrl,
+                    size: 38,
+                    status: ConvoAvatarStatus.online,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        titleWidget: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ShaderMask(
+                  shaderCallback: (bounds) =>
+                      AppColors.brandGradient.createShader(bounds),
+                  child: Text(
+                    AppConstants.appName,
+                    style: AppTypography.titleLarge.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 1.1,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: const BoxDecoration(
+                    color: AppColors.accent,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.accent,
+                        blurRadius: 6,
+                        spreadRadius: 1,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            Text(
+              'Encrypted • Mesh Ready',
+              style: AppTypography.labelSmall.copyWith(
+                color: context.convoColors.textTertiary,
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
         actions: [
           IconButton(
             icon: Icon(
@@ -225,7 +383,6 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
         child: Column(
           children: [
             if (_isSearching) _buildSearchBar(),
-            _buildFilterChips(),
             Expanded(
               child: conversationsAsync.when(
                 loading: () => const Center(child: CircularProgressIndicator()),
@@ -267,10 +424,23 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
                   ),
                 ),
                 data: (conversations) {
-                  return _buildConversationList(
-                    context,
-                    conversations,
-                    currentUserId,
+                  return Column(
+                    children: [
+                      if (!_isSearching && conversations.isNotEmpty)
+                        _buildActiveConversationsRow(
+                          context,
+                          conversations,
+                          currentUserId,
+                        ),
+                      _buildFilterChips(),
+                      Expanded(
+                        child: _buildConversationList(
+                          context,
+                          conversations,
+                          currentUserId,
+                        ),
+                      ),
+                    ],
                   );
                 },
               ),
@@ -278,15 +448,172 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        heroTag: 'chats_new_chat_fab',
-        onPressed: _onNewChatPressed,
-        icon: const Icon(Icons.edit_outlined, size: 20),
-        label: const Text(AppStrings.newChat),
-        backgroundColor: context.colorScheme.primary,
-        foregroundColor: Colors.white,
-        elevation: 4,
-        shape: RoundedRectangleBorder(borderRadius: AppRadius.borderLg),
+      floatingActionButton: Container(
+        decoration: BoxDecoration(
+          borderRadius: AppRadius.borderLg,
+          gradient: AppColors.brandGradient,
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.primary.withValues(alpha: 0.35),
+              blurRadius: 16,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: FloatingActionButton.extended(
+          heroTag: 'chats_new_chat_fab',
+          onPressed: _onNewChatPressed,
+          icon: const Icon(Icons.edit_outlined, size: 20, color: Colors.white),
+          label: Text(
+            AppStrings.newChat,
+            style: AppTypography.labelLarge.copyWith(
+              color: Colors.white,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          highlightElevation: 0,
+          shape: RoundedRectangleBorder(borderRadius: AppRadius.borderLg),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildActiveConversationsRow(
+    BuildContext context,
+    List<ConversationModel> conversations,
+    String currentUserId,
+  ) {
+    final directConversations =
+        conversations.where((c) => !c.isGroup).take(12).toList();
+
+    return Container(
+      height: 96,
+      margin: const EdgeInsets.only(top: AppSpacing.xs, bottom: 2),
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+        itemCount: directConversations.length + 1,
+        separatorBuilder: (_, _) => const SizedBox(width: 14),
+        itemBuilder: (context, index) {
+          if (index == 0) {
+            // Nearby Radar shortcut
+            return InkWell(
+              onTap: () => context.go(AppRoutes.nearby),
+              borderRadius: BorderRadius.circular(28),
+              child: SizedBox(
+                width: 62,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 52,
+                      height: 52,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: AppColors.meshGradient,
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppColors.primary.withValues(alpha: 0.28),
+                            blurRadius: 10,
+                            offset: const Offset(0, 3),
+                          ),
+                        ],
+                      ),
+                      child: const Center(
+                        child: Icon(
+                          Icons.radar_rounded,
+                          color: Colors.white,
+                          size: 24,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Nearby',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTypography.labelSmall.copyWith(
+                        color: context.convoColors.textPrimary,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
+
+          final conv = directConversations[index - 1];
+          final otherId = conv.otherParticipantId(currentUserId);
+          final otherName = conv.otherParticipantName(currentUserId);
+          final firstName = otherName.trim().split(' ').first;
+          final initials = otherName.isNotEmpty
+              ? (otherName.length >= 2
+                    ? otherName.substring(0, 2).toUpperCase()
+                    : otherName[0].toUpperCase())
+              : 'CO';
+
+          final presence =
+              ref.watch(userPresenceProvider(otherId)).asData?.value;
+          final isOnline = presence?.isOnline ?? false;
+
+          return InkWell(
+            onTap: () => _openConversation(conv, currentUserId),
+            borderRadius: BorderRadius.circular(28),
+            child: SizedBox(
+              width: 62,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(2.5),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: isOnline
+                          ? AppColors.brandGradient
+                          : LinearGradient(
+                              colors: [
+                                context.convoColors.cardBorder,
+                                context.convoColors.cardBorder,
+                              ],
+                            ),
+                    ),
+                    child: Container(
+                      padding: const EdgeInsets.all(1.5),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: context.convoColors.cardBackground,
+                      ),
+                      child: ConvoAvatar(
+                        initials: initials,
+                        photoUrl: conv.otherParticipantPhoto(currentUserId),
+                        size: 44,
+                        status: isOnline
+                            ? ConvoAvatarStatus.online
+                            : ConvoAvatarStatus.offline,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    firstName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTypography.labelSmall.copyWith(
+                      color: context.convoColors.textPrimary,
+                      fontWeight:
+                          isOnline ? FontWeight.w700 : FontWeight.w500,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -297,24 +624,62 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
         horizontal: AppSpacing.lg,
         vertical: AppSpacing.sm,
       ),
-      child: TextField(
-        controller: _searchController,
-        autofocus: true,
-        decoration: InputDecoration(
-          hintText: AppStrings.searchChatsHint,
-          prefixIcon: const Icon(Icons.search_rounded, size: 20),
-          suffixIcon: _searchController.text.isNotEmpty
-              ? IconButton(
-                  icon: const Icon(Icons.clear, size: 18),
-                  onPressed: () {
-                    setState(() {
-                      _searchController.clear();
-                    });
-                  },
-                )
-              : null,
+      child: Container(
+        decoration: BoxDecoration(
+          color: context.convoColors.surfaceSubtle,
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(
+            color: context.colorScheme.primary.withValues(alpha: 0.35),
+            width: 1.2,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: context.colorScheme.primary.withValues(alpha: 0.08),
+              blurRadius: 10,
+              offset: const Offset(0, 3),
+            ),
+          ],
         ),
-        onChanged: (_) => setState(() {}),
+        child: TextField(
+          controller: _searchController,
+          autofocus: true,
+          style: AppTypography.bodyMedium.copyWith(
+            color: context.convoColors.textPrimary,
+          ),
+          decoration: InputDecoration(
+            hintText: AppStrings.searchChatsHint,
+            hintStyle: AppTypography.bodyMedium.copyWith(
+              color: context.convoColors.textTertiary,
+            ),
+            prefixIcon: Icon(
+              Icons.search_rounded,
+              color: context.colorScheme.primary,
+              size: 22,
+            ),
+            suffixIcon: _searchController.text.isNotEmpty
+                ? IconButton(
+                    icon: Icon(
+                      Icons.clear_rounded,
+                      size: 18,
+                      color: context.convoColors.textTertiary,
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        _searchController.clear();
+                      });
+                    },
+                  )
+                : null,
+            border: InputBorder.none,
+            enabledBorder: InputBorder.none,
+            focusedBorder: InputBorder.none,
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.md,
+              vertical: 12,
+            ),
+          ),
+          onChanged: (_) => setState(() {}),
+        ),
       ),
     );
   }
@@ -373,9 +738,11 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
   ) {
     final pinnedIds = ref.watch(pinnedChatIdsProvider);
     final archivedIds = ref.watch(archivedChatIdsProvider);
+    final deletedIds = ref.watch(deletedChatIdsProvider);
 
-    // 1. Filter out archived conversations from the main chat list (unless actively searching or viewing another tab)
+    // 1. Filter out archived and deleted conversations from the main chat list (unless actively searching or viewing another tab)
     var filtered = conversations.where((c) {
+      if (deletedIds.contains(c.id)) return false;
       if (_searchController.text.trim().isNotEmpty) return true;
       return !archivedIds.contains(c.id);
     }).toList();
@@ -421,30 +788,39 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
     if (filtered.isEmpty && !showArchivedBanner) {
       if (_searchController.text.isNotEmpty) {
         return Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                Icons.search_off_rounded,
-                size: 48,
-                color: context.convoColors.textTertiary,
-              ),
-              const SizedBox(height: AppSpacing.md),
-              Text(
-                'No conversations found',
-                style: AppTypography.titleMedium.copyWith(
-                  color: context.convoColors.textPrimary,
-                  fontWeight: FontWeight.w600,
+          child: Padding(
+            padding: const EdgeInsets.all(AppSpacing.xl),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.search_off_rounded,
+                  size: 48,
+                  color: context.convoColors.textTertiary,
                 ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'Try searching for another name or keyword',
-                style: AppTypography.bodySmall.copyWith(
-                  color: context.convoColors.textSecondary,
+                const SizedBox(height: AppSpacing.md),
+                Text(
+                  'No conversations found',
+                  style: AppTypography.titleMedium.copyWith(
+                    color: context.convoColors.textPrimary,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
-              ),
-            ],
+                const SizedBox(height: 4),
+                Text(
+                  'No active chat matching "${_searchController.text.trim()}"',
+                  style: AppTypography.bodySmall.copyWith(
+                    color: context.convoColors.textSecondary,
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.lg),
+                FilledButton.icon(
+                  onPressed: () => UserSearchModal.show(context),
+                  icon: const Icon(Icons.person_search_rounded, size: 18),
+                  label: const Text('Search Registered Users'),
+                ),
+              ],
+            ),
           ),
         );
       }
@@ -586,8 +962,6 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
         final otherId = isGroup
             ? ''
             : conversation.otherParticipantId(currentUserId);
-        final unreadCount = conversation.unreadCountFor(currentUserId);
-        final isLastFromMe = conversation.lastMessageSenderId == currentUserId;
 
         // Watch live presence of other user (only for direct 1-to-1 chats)
         final otherUserPresence = isGroup
@@ -599,12 +973,12 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
             (currentUserProfile?.isUserBlocked(otherId) ?? false);
 
         final canSeePhoto = isGroup ||
-            (otherUserPresence != null &&
-                PrivacyHelper.canViewPhoto(
-                  targetUser: otherUserPresence,
-                  viewerUserId: currentUserId,
-                  hasConversation: true,
-                ));
+            otherUserPresence == null ||
+            PrivacyHelper.canViewPhoto(
+              targetUser: otherUserPresence,
+              viewerUserId: currentUserId,
+              hasConversation: true,
+            );
         final canSeeOnline = !isGroup &&
             otherUserPresence != null &&
             !isBlockedByMe &&
@@ -615,21 +989,22 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
             );
         final isOnline = canSeeOnline && otherUserPresence.isOnline;
 
-        final initials = displayName.isNotEmpty
-            ? (displayName.length >= 2
-                  ? displayName.substring(0, 2).toUpperCase()
-                  : displayName[0].toUpperCase())
-            : (isGroup ? 'GP' : 'CO');
-
         final photoUrl = isGroup
             ? conversation.photoUrl
-            : (canSeePhoto ? otherUserPresence?.photoUrl : null);
+            : (canSeePhoto
+                ? (otherUserPresence?.photoUrl ??
+                    conversation.otherParticipantPhoto(currentUserId))
+                : null);
 
-        return ListTile(
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.lg,
-            vertical: 4,
-          ),
+        return ChatPreviewTile(
+          conversation: conversation,
+          currentUserId: currentUserId,
+          isPinned: isPinned,
+          isMuted: isMuted,
+          isArchived: isArchived,
+          isOnline: isOnline,
+          photoUrl: photoUrl,
+          displayName: displayName,
           onTap: () => _openConversation(conversation, currentUserId),
           onLongPress: () => _showConversationOptions(
             context,
@@ -637,187 +1012,36 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
             isPinned,
             isArchived,
             isMuted,
+            displayName,
             currentUserId,
           ),
-          leading: ConvoAvatar(
-            initials: initials,
-            photoUrl: photoUrl,
-            size: 52,
-            status: isOnline
-                ? ConvoAvatarStatus.online
-                : ConvoAvatarStatus.offline,
-          ),
-          title: Row(
-            children: [
-              Expanded(
-                child: Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        displayName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppTypography.titleMedium.copyWith(
-                          color: context.convoColors.textPrimary,
-                          fontWeight: unreadCount > 0
-                              ? FontWeight.w800
-                              : FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                    if (isPinned) ...[
-                      const SizedBox(width: 4),
-                      Icon(
-                        Icons.push_pin_rounded,
-                        size: 14,
-                        color: context.colorScheme.primary,
-                      ),
-                    ],
-                    if (isMuted) ...[
-                      const SizedBox(width: 4),
-                      Icon(
-                        Icons.notifications_off_rounded,
-                        size: 14,
-                        color: context.convoColors.textTertiary,
-                      ),
-                    ],
-                    if (isGroup) ...[
-                      const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 5,
-                          vertical: 1,
-                        ),
-                        decoration: BoxDecoration(
-                          color: context.colorScheme.primary.withValues(
-                            alpha: 0.12,
-                          ),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          'GROUP',
-                          style: TextStyle(
-                            color: context.colorScheme.primary,
-                            fontSize: 9,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 0.5,
-                          ),
-                        ),
-                      ),
-                    ],
-                    if (conversation.hasMood &&
-                        conversation.moodEmoji != null) ...[
-                      const SizedBox(width: 4),
-                      Text(
-                        conversation.moodEmoji!,
-                        style: const TextStyle(fontSize: 13),
-                      ),
-                    ],
-                  ],
-                ),
+          onPinToggle: () {
+            ref.read(pinnedChatIdsProvider.notifier).togglePin(conversation.id);
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(isPinned ? 'Chat unpinned' : 'Chat pinned to top'),
+                behavior: SnackBarBehavior.floating,
+                duration: const Duration(seconds: 1),
               ),
-              const SizedBox(width: AppSpacing.xs),
-              Text(
-                DateFormatter.formatConversationTime(
-                  conversation.lastMessageAt,
-                ),
-                style: AppTypography.labelSmall.copyWith(
-                  color: unreadCount > 0
-                      ? context.colorScheme.primary
-                      : context.convoColors.textTertiary,
-                  fontWeight: unreadCount > 0
-                      ? FontWeight.w700
-                      : FontWeight.w500,
-                ),
+            );
+          },
+          onMuteToggle: () async {
+            await ref.read(chatControllerProvider.notifier).toggleGroupMute(
+                  conversationId: conversation.id,
+                  mute: !isMuted,
+                );
+          },
+          onArchiveToggle: () {
+            ref.read(archivedChatIdsProvider.notifier).toggleArchive(conversation.id);
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(isArchived ? 'Chat unarchived' : 'Chat archived'),
+                behavior: SnackBarBehavior.floating,
+                duration: const Duration(seconds: 1),
               ),
-            ],
-          ),
-          subtitle: Row(
-            children: [
-              Expanded(
-                child: Row(
-                  children: [
-                    if (conversation.lastMessage == 'Photo') ...[
-                      Icon(
-                        Icons.photo_camera_rounded,
-                        size: 14,
-                        color: unreadCount > 0
-                            ? context.colorScheme.primary
-                            : context.convoColors.textTertiary,
-                      ),
-                      const SizedBox(width: 4),
-                    ] else if (conversation.lastMessage == 'Video') ...[
-                      Icon(
-                        Icons.videocam_rounded,
-                        size: 14,
-                        color: unreadCount > 0
-                            ? context.colorScheme.primary
-                            : context.convoColors.textTertiary,
-                      ),
-                      const SizedBox(width: 4),
-                    ] else if (conversation.lastMessage == 'Voice message') ...[
-                      Icon(
-                        Icons.mic_rounded,
-                        size: 14,
-                        color: unreadCount > 0
-                            ? context.colorScheme.primary
-                            : context.convoColors.textTertiary,
-                      ),
-                      const SizedBox(width: 4),
-                    ] else if (conversation.lastMessage.contains(
-                      'Sticker',
-                    )) ...[
-                      const Text('🎨 ', style: TextStyle(fontSize: 11)),
-                    ] else if (conversation.lastMessage.startsWith('🎲')) ...[
-                      const Text('🎲 ', style: TextStyle(fontSize: 11)),
-                    ] else if (conversation.lastMessage.startsWith('⏳')) ...[
-                      const Text('⏳ ', style: TextStyle(fontSize: 11)),
-                    ],
-                    Expanded(
-                      child: Text(
-                        conversation.lastMessage.isEmpty
-                            ? 'Started a new conversation'
-                            : (isLastFromMe
-                                  ? 'You: ${conversation.lastMessage}'
-                                  : conversation.lastMessage),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppTypography.bodySmall.copyWith(
-                          color: unreadCount > 0
-                              ? context.convoColors.textPrimary
-                              : context.convoColors.textSecondary,
-                          fontWeight: unreadCount > 0
-                              ? FontWeight.w600
-                              : FontWeight.normal,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (unreadCount > 0) ...[
-                const SizedBox(width: AppSpacing.sm),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 7,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: context.colorScheme.primary,
-                    borderRadius: AppRadius.borderPill,
-                  ),
-                  child: Text(
-                    unreadCount > 99 ? '99+' : unreadCount.toString(),
-                    style: AppTypography.labelSmall.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 10,
-                    ),
-                  ),
-                ),
-              ],
-            ],
-          ),
+            );
+          },
+          onDelete: () => _confirmDeleteConversation(context, conversation, displayName),
         );
       },
     );

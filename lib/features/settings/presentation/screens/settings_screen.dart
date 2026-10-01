@@ -12,8 +12,10 @@ import '../../../../core/theme/app_typography.dart';
 import '../../../../core/theme/theme_provider.dart';
 import '../../../../core/utils/extensions.dart';
 import '../../../../core/widgets/convo_app_bar.dart';
+import '../../../../core/widgets/convo_avatar.dart';
 import '../../../../core/widgets/convo_badge.dart';
 import '../../../../core/widgets/convo_card.dart';
+import '../../../../core/widgets/convo_setting_tile.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
 import '../../../nearby/presentation/providers/nearby_providers.dart';
 
@@ -28,10 +30,12 @@ class SettingsScreen extends ConsumerWidget {
       appBar: ConvoAppBar(
         title: AppStrings.settingsTitle,
         subtitle: 'Preferences & Security',
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded),
-          onPressed: () => Navigator.of(context).maybePop(),
-        ),
+        leading: Navigator.of(context).canPop()
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back_rounded),
+                onPressed: () => Navigator.of(context).maybePop(),
+              )
+            : null,
       ),
       body: SafeArea(
         child: ListView(
@@ -40,89 +44,173 @@ class SettingsScreen extends ConsumerWidget {
             vertical: AppSpacing.md,
           ),
           children: [
-            _buildSectionHeader(context, 'PREFERENCES'),
-            const SizedBox(height: AppSpacing.sm),
+            // 1. Profile Section
+            _buildProfileHeaderCard(context, ref),
+            const SizedBox(height: AppSpacing.lg),
+
+            // 2. Appearance Section
+            const ConvoSettingSectionHeader(title: 'APPEARANCE'),
+            const SizedBox(height: AppSpacing.xs),
             _buildThemeSelectorCard(context, ref, themeMode),
-            const SizedBox(height: AppSpacing.md),
-            _buildSettingsItem(
-              context,
-              icon: Icons.notifications_none_rounded,
-              iconColor: AppColors.blueGlow,
-              title: AppStrings.notifications,
-              subtitle: AppStrings.notificationsDesc,
-              onTap: () => _showNotificationSettings(context, ref),
+            const SizedBox(height: AppSpacing.lg),
+
+            // 3. Chat Settings Section
+            const ConvoSettingSectionHeader(title: 'CHATS & MESSAGING'),
+            const SizedBox(height: AppSpacing.xs),
+            ConvoCard(
+              padding: EdgeInsets.zero,
+              child: Column(
+                children: [
+                  ConvoSettingTile(
+                    icon: Icons.chat_bubble_outline_rounded,
+                    iconColor: AppColors.primary,
+                    title: AppStrings.chatSettings,
+                    subtitle: AppStrings.chatSettingsDesc,
+                    onTap: () => _showChatSettingsModal(context, ref),
+                  ),
+                  Divider(
+                    height: 1,
+                    indent: 56,
+                    color: context.convoColors.cardBorder.withValues(alpha: 0.5),
+                  ),
+                  ConvoSettingTile(
+                    icon: Icons.star_rounded,
+                    iconColor: AppColors.amberGlow,
+                    title: 'Saved Messages',
+                    subtitle: 'Access bookmarked messages & media',
+                    onTap: () => context.push(AppRoutes.starredMessages),
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(height: AppSpacing.md),
-            _buildSettingsItem(
-              context,
-              icon: Icons.star_rounded,
-              iconColor: AppColors.accent,
-              title: 'Saved Messages',
-              subtitle: 'Access bookmarked messages, notes & media',
-              onTap: () => context.push(AppRoutes.starredMessages),
+            const SizedBox(height: AppSpacing.lg),
+
+            // 4. Secret Chat Section
+            const ConvoSettingSectionHeader(title: 'SECRET & DISAPPEARING CHATS'),
+            const SizedBox(height: AppSpacing.xs),
+            ConvoCard(
+              padding: EdgeInsets.zero,
+              child: ConvoSettingTile(
+                icon: Icons.timer_outlined,
+                iconColor: AppColors.coralGlow,
+                title: AppStrings.secretChat,
+                subtitle: AppStrings.secretChatDesc,
+                onTap: () => _showSecretChatSettingsModal(context),
+              ),
             ),
-            const SizedBox(height: AppSpacing.xl),
-            _buildSectionHeader(context, 'NEARBY & OFFLINE MESH'),
-            const SizedBox(height: AppSpacing.sm),
+            const SizedBox(height: AppSpacing.lg),
+
+            // 5. Notifications Section
+            const ConvoSettingSectionHeader(title: 'NOTIFICATIONS'),
+            const SizedBox(height: AppSpacing.xs),
+            ConvoCard(
+              padding: EdgeInsets.zero,
+              child: ConvoSettingTile(
+                icon: Icons.notifications_none_rounded,
+                iconColor: AppColors.blueGlow,
+                title: AppStrings.notifications,
+                subtitle: AppStrings.notificationsDesc,
+                onTap: () => _showNotificationSettings(context, ref),
+              ),
+            ),
+            const SizedBox(height: AppSpacing.lg),
+
+            // 6. Privacy Section
+            const ConvoSettingSectionHeader(title: 'PRIVACY & SECURITY'),
+            const SizedBox(height: AppSpacing.xs),
+            ConvoCard(
+              padding: EdgeInsets.zero,
+              child: Column(
+                children: [
+                  ConvoSettingTile(
+                    icon: Icons.lock_outline_rounded,
+                    iconColor: AppColors.accent,
+                    title: AppStrings.privacy,
+                    subtitle: AppStrings.privacyDesc,
+                    onTap: () => _showPrivacySettings(context, ref),
+                  ),
+                  Divider(
+                    height: 1,
+                    indent: 56,
+                    color: context.convoColors.cardBorder.withValues(alpha: 0.5),
+                  ),
+                  ConvoSettingTile(
+                    icon: Icons.block_rounded,
+                    iconColor: AppColors.error,
+                    title: 'Blocked Contacts',
+                    subtitle: 'Manage blocked users and unblock',
+                    onTap: () => _showBlockedContactsModal(context, ref),
+                  ),
+                  Divider(
+                    height: 1,
+                    indent: 56,
+                    color: context.convoColors.cardBorder.withValues(alpha: 0.5),
+                  ),
+                  ConvoSettingTile(
+                    icon: Icons.security_rounded,
+                    iconColor: AppColors.amberGlow,
+                    title: AppStrings.security,
+                    subtitle: AppStrings.securityDesc,
+                    onTap: () => _showPlaceholderModal(
+                      context,
+                      title: AppStrings.security,
+                      description:
+                          'Setup biometric app lock, local encrypted key backups, and zero-knowledge session pins.',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: AppSpacing.lg),
+
+            // Nearby Offline Mesh
+            const ConvoSettingSectionHeader(title: 'NEARBY & OFFLINE MESH'),
+            const SizedBox(height: AppSpacing.xs),
             _buildNearbyModeCard(context, ref),
-            const SizedBox(height: AppSpacing.md),
-            _buildSettingsItem(
-              context,
-              icon: Icons.shield_outlined,
-              iconColor: AppColors.accentPurple,
-              title: 'Nearby Privacy & Consent',
-              subtitle: 'Opt-in discovery • Session tokens • Zero leaks',
-              onTap: () => _showNearbyPrivacyModal(context),
+            const SizedBox(height: AppSpacing.sm),
+            ConvoCard(
+              padding: EdgeInsets.zero,
+              child: ConvoSettingTile(
+                icon: Icons.shield_outlined,
+                iconColor: AppColors.accentPurple,
+                title: 'Nearby Privacy & Consent',
+                subtitle: 'Opt-in discovery • Session tokens • Zero leaks',
+                onTap: () => _showNearbyPrivacyModal(context),
+              ),
             ),
-            const SizedBox(height: AppSpacing.md),
+            const SizedBox(height: AppSpacing.sm),
             _buildOfflineQueueCard(context, ref),
-            const SizedBox(height: AppSpacing.xl),
-            _buildSectionHeader(context, 'PRIVACY & SECURITY'),
-            const SizedBox(height: AppSpacing.sm),
-            _buildSettingsItem(
-              context,
-              icon: Icons.lock_outline_rounded,
-              iconColor: AppColors.accent,
-              title: AppStrings.privacy,
-              subtitle: AppStrings.privacyDesc,
-              onTap: () => _showPrivacySettings(context, ref),
-            ),
-            const SizedBox(height: AppSpacing.md),
-            _buildSettingsItem(
-              context,
-              icon: Icons.block_rounded,
-              iconColor: AppColors.error,
-              title: 'Blocked Contacts',
-              subtitle: 'Manage blocked users and unblock',
-              onTap: () => _showBlockedContactsModal(context, ref),
-            ),
-            const SizedBox(height: AppSpacing.md),
-            _buildSettingsItem(
-              context,
-              icon: Icons.security_rounded,
-              iconColor: AppColors.amberGlow,
-              title: AppStrings.security,
-              subtitle: AppStrings.securityDesc,
-              onTap: () => _showPlaceholderModal(
-                context,
-                title: AppStrings.security,
-                description: 'Setup biometric app lock, local encrypted key backups, and zero-knowledge session pins.',
+            const SizedBox(height: AppSpacing.lg),
+
+            // 7. About CONVO Section
+            const ConvoSettingSectionHeader(title: 'ABOUT & SYSTEM'),
+            const SizedBox(height: AppSpacing.xs),
+            ConvoCard(
+              padding: EdgeInsets.zero,
+              child: ConvoSettingTile(
+                icon: Icons.info_outline_rounded,
+                iconColor: AppColors.violetGlow,
+                title: AppStrings.about,
+                subtitle: AppStrings.aboutDesc,
+                trailing: const ConvoBadge(
+                  label: 'v${AppConstants.appVersion}',
+                  variant: ConvoBadgeVariant.subtle,
+                ),
+                onTap: () => _showAboutModal(context),
               ),
             ),
             const SizedBox(height: AppSpacing.xl),
-            _buildSectionHeader(context, 'ABOUT & SYSTEM'),
-            const SizedBox(height: AppSpacing.sm),
-            _buildSettingsItem(
-              context,
-              icon: Icons.info_outline_rounded,
-              iconColor: AppColors.violetGlow,
-              title: AppStrings.about,
-              subtitle: AppStrings.aboutDesc,
-              trailing: const ConvoBadge(
-                label: 'v${AppConstants.appVersion}',
-                variant: ConvoBadgeVariant.subtle,
+
+            // Sign Out Action
+            ConvoCard(
+              padding: EdgeInsets.zero,
+              child: ConvoSettingTile(
+                icon: Icons.logout_rounded,
+                isDestructive: true,
+                title: 'Sign Out',
+                subtitle: 'Disconnect active sessions on this device',
+                onTap: () => _showLogoutConfirmation(context, ref),
               ),
-              onTap: () => _showAboutModal(context),
             ),
             const SizedBox(height: AppSpacing.xxxl),
           ],
@@ -131,16 +219,429 @@ class SettingsScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildSectionHeader(BuildContext context, String title) {
-    return Padding(
-      padding: const EdgeInsets.only(left: AppSpacing.xs),
-      child: Text(
-        title,
-        style: AppTypography.labelMedium.copyWith(
-          color: context.convoColors.textTertiary,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 1.0,
+  Widget _buildProfileHeaderCard(BuildContext context, WidgetRef ref) {
+    final user = ref.watch(currentUserProfileProvider).asData?.value;
+    final displayName = user?.name ?? 'Alex Rivera';
+    final email = user?.email ?? '@alex.convo';
+    final initials = user?.initials ??
+        (displayName.isNotEmpty ? displayName[0].toUpperCase() : 'CO');
+
+    return ConvoCard(
+      onTap: () => context.push(AppRoutes.profile),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(2),
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: AppColors.brandGradient,
+            ),
+            child: ConvoAvatar(
+              initials: initials,
+              photoUrl: user?.photoUrl,
+              size: 54,
+              status: ConvoAvatarStatus.online,
+            ),
+          ),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        displayName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTypography.titleLarge.copyWith(
+                          color: context.convoColors.textPrimary,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 17,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.accent.withValues(alpha: 0.15),
+                        borderRadius: AppRadius.borderPill,
+                      ),
+                      child: Text(
+                        'ONLINE',
+                        style: AppTypography.labelSmall.copyWith(
+                          color: AppColors.accent,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  email,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTypography.bodySmall.copyWith(
+                    color: context.convoColors.textSecondary,
+                  ),
+                ),
+                if (user?.effectiveBio != null &&
+                    user!.effectiveBio.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    user.effectiveBio,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTypography.labelSmall.copyWith(
+                      color: context.colorScheme.primary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          Icon(
+            Icons.chevron_right_rounded,
+            color: context.convoColors.textTertiary,
+            size: 22,
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showChatSettingsModal(BuildContext context, WidgetRef ref) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: context.convoColors.cardBackground,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.xl)),
+      ),
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return SafeArea(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(AppSpacing.lg),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.chat_bubble_outline_rounded,
+                              color: AppColors.primary,
+                            ),
+                            const SizedBox(width: AppSpacing.sm),
+                            Text(
+                              AppStrings.chatSettings,
+                              style: AppTypography.titleLarge.copyWith(
+                                color: context.convoColors.textPrimary,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close_rounded),
+                          onPressed: () => Navigator.of(sheetContext).pop(),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: AppSpacing.xs),
+                    Text(
+                      'Customize chat behavior, input preferences, and media download settings.',
+                      style: AppTypography.bodySmall.copyWith(
+                        color: context.convoColors.textSecondary,
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        'Enter is Send',
+                        style: AppTypography.titleMedium.copyWith(
+                          color: context.convoColors.textPrimary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      subtitle: Text(
+                        'Enter key sends message on keyboard',
+                        style: AppTypography.bodySmall.copyWith(
+                          color: context.convoColors.textSecondary,
+                        ),
+                      ),
+                      value: true,
+                      onChanged: (val) {},
+                    ),
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        'Auto-Download on Wi-Fi',
+                        style: AppTypography.titleMedium.copyWith(
+                          color: context.convoColors.textPrimary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      subtitle: Text(
+                        'Automatically download photos and voice notes',
+                        style: AppTypography.bodySmall.copyWith(
+                          color: context.convoColors.textSecondary,
+                        ),
+                      ),
+                      value: true,
+                      onChanged: (val) {},
+                    ),
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        'Save to Gallery',
+                        style: AppTypography.titleMedium.copyWith(
+                          color: context.convoColors.textPrimary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      subtitle: Text(
+                        'Save received media to device photos',
+                        style: AppTypography.bodySmall.copyWith(
+                          color: context.convoColors.textSecondary,
+                        ),
+                      ),
+                      value: false,
+                      onChanged: (val) {},
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        'Clear Local Chat Cache',
+                        style: AppTypography.titleMedium.copyWith(
+                          color: context.convoColors.textPrimary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      subtitle: Text(
+                        'Clears cached media files without deleting messages',
+                        style: AppTypography.bodySmall.copyWith(
+                          color: context.convoColors.textSecondary,
+                        ),
+                      ),
+                      trailing: const Text(
+                        '12.4 MB',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      onTap: () {
+                        Navigator.of(sheetContext).pop();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Chat cache cleared successfully.'),
+                            behavior: SnackBarBehavior.floating,
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showSecretChatSettingsModal(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: context.convoColors.cardBackground,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.xl)),
+      ),
+      builder: (sheetContext) {
+        String selectedTimer = 'off';
+
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return SafeArea(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(AppSpacing.lg),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.timer_outlined,
+                              color: AppColors.coralGlow,
+                            ),
+                            const SizedBox(width: AppSpacing.sm),
+                            Text(
+                              AppStrings.secretChat,
+                              style: AppTypography.titleLarge.copyWith(
+                                color: context.convoColors.textPrimary,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close_rounded),
+                          onPressed: () => Navigator.of(sheetContext).pop(),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: AppSpacing.xs),
+                    Text(
+                      'Secret chats use end-to-end device keys and self-destructing messages that leave no cloud trace.',
+                      style: AppTypography.bodySmall.copyWith(
+                        color: context.convoColors.textSecondary,
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                    Text(
+                      'Default Disappearing Message Timer',
+                      style: AppTypography.labelMedium.copyWith(
+                        color: context.convoColors.textPrimary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                    SegmentedButton<String>(
+                      segments: const [
+                        ButtonSegment(value: 'off', label: Text('Off')),
+                        ButtonSegment(value: '30s', label: Text('30s')),
+                        ButtonSegment(value: '5m', label: Text('5m')),
+                        ButtonSegment(value: '1h', label: Text('1h')),
+                        ButtonSegment(value: '24h', label: Text('24h')),
+                      ],
+                      selected: {selectedTimer},
+                      onSelectionChanged: (newSelection) {
+                        setModalState(() {
+                          selectedTimer = newSelection.first;
+                        });
+                      },
+                      style: SegmentedButton.styleFrom(
+                        selectedBackgroundColor: AppColors.coralGlow,
+                        selectedForegroundColor: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        'Screenshot Detection Alerts',
+                        style: AppTypography.titleMedium.copyWith(
+                          color: context.convoColors.textPrimary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      subtitle: Text(
+                        'Send alert in conversation if recipient captures screen',
+                        style: AppTypography.bodySmall.copyWith(
+                          color: context.convoColors.textSecondary,
+                        ),
+                      ),
+                      value: true,
+                      onChanged: (val) {},
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                    Container(
+                      padding: const EdgeInsets.all(AppSpacing.md),
+                      decoration: BoxDecoration(
+                        color: AppColors.coralGlow.withValues(alpha: 0.1),
+                        borderRadius: AppRadius.borderMd,
+                        border: Border.all(
+                          color: AppColors.coralGlow.withValues(alpha: 0.3),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.security_rounded,
+                            color: AppColors.coralGlow,
+                            size: 20,
+                          ),
+                          const SizedBox(width: AppSpacing.sm),
+                          Expanded(
+                            child: Text(
+                              'CONVO Secret Chats use zero-knowledge ephemeral keys. Messages cannot be forwarded or recovered once deleted.',
+                              style: AppTypography.bodySmall.copyWith(
+                                color: AppColors.coralGlow,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showLogoutConfirmation(BuildContext context, WidgetRef ref) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: context.convoColors.cardBackground,
+        shape: RoundedRectangleBorder(borderRadius: AppRadius.borderXl),
+        title: Row(
+          children: [
+            const Icon(Icons.logout_rounded, color: AppColors.error),
+            const SizedBox(width: AppSpacing.sm),
+            Text(
+              'Sign Out',
+              style: AppTypography.titleLarge.copyWith(
+                color: context.convoColors.textPrimary,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
         ),
+        content: Text(
+          'Are you sure you want to sign out of CONVO? Your local offline mesh sessions will be disconnected.',
+          style: AppTypography.bodyMedium.copyWith(
+            color: context.convoColors.textSecondary,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              Navigator.of(dialogContext).pop();
+              await ref.read(authControllerProvider.notifier).signOut();
+            },
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.error,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Sign Out'),
+          ),
+        ],
       ),
     );
   }
@@ -226,63 +727,6 @@ class SettingsScreen extends ConsumerWidget {
               side: BorderSide(color: context.convoColors.cardBorder),
             ),
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSettingsItem(
-    BuildContext context, {
-    required IconData icon,
-    required Color iconColor,
-    required String title,
-    required String subtitle,
-    required VoidCallback onTap,
-    Widget? trailing,
-  }) {
-    return ConvoCard(
-      onTap: onTap,
-      child: Row(
-        children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: iconColor.withValues(alpha: 0.12),
-              borderRadius: AppRadius.borderSm,
-            ),
-            child: Icon(icon, color: iconColor, size: 20),
-          ),
-          const SizedBox(width: AppSpacing.md),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: AppTypography.titleMedium.copyWith(
-                    color: context.convoColors.textPrimary,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: AppTypography.bodySmall.copyWith(
-                    color: context.convoColors.textSecondary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (trailing != null)
-            trailing
-          else
-            Icon(
-              Icons.chevron_right_rounded,
-              color: context.convoColors.textTertiary,
-              size: 20,
-            ),
         ],
       ),
     );

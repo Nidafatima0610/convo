@@ -121,26 +121,25 @@ void main() {
       expect(find.text(AppConstants.appName), findsOneWidget);
       expect(find.text(AppStrings.chatsEmptyTitle), findsOneWidget);
 
-      // Verify bottom navigation tabs exist
+      // Verify bottom navigation tabs exist (Chats, Nearby, Calls, Settings)
       expect(find.text(AppStrings.navChats), findsOneWidget);
       expect(find.text(AppStrings.navNearby), findsOneWidget);
       expect(find.text(AppStrings.navCalls), findsOneWidget);
-      expect(find.text(AppStrings.navDiscover), findsOneWidget);
-      expect(find.text(AppStrings.navProfile), findsOneWidget);
+      expect(find.text(AppStrings.navSettings), findsOneWidget);
 
-      // Navigate to Profile tab
-      await tester.tap(find.byIcon(Icons.person_outline_rounded));
-      await tester.pump(const Duration(milliseconds: 300));
+      // Navigate to Settings tab
+      await tester.tap(find.byIcon(Icons.settings_outlined));
+      await tester.pumpAndSettle();
 
-      // Verify authenticated user details from Firestore are displayed
+      // Verify authenticated user details from Firestore and settings are displayed
       expect(find.text('Alex Rivera'), findsOneWidget);
       expect(find.text('alex@convo.app'), findsOneWidget);
-      expect(find.text('Sign Out'), findsOneWidget);
+      expect(find.text(AppStrings.settingsTitle), findsAtLeastNWidgets(1));
 
-      // Verify Settings is accessible from Profile
-      await tester.tap(find.byIcon(Icons.settings_outlined).first);
-      await tester.pump(const Duration(milliseconds: 300));
-      expect(find.text(AppStrings.settingsTitle), findsOneWidget);
+      // Verify Profile details are accessible by tapping user profile card
+      await tester.tap(find.text('Alex Rivera'));
+      await tester.pumpAndSettle();
+      expect(find.text('Sign Out'), findsOneWidget);
     },
   );
 
@@ -614,10 +613,13 @@ void main() {
       await tester.pumpAndSettle();
 
       // Verify Nearby & Offline Mesh section
+      await tester.scrollUntilVisible(find.text('NEARBY & OFFLINE MESH'), 300);
       expect(find.text('NEARBY & OFFLINE MESH'), findsOneWidget);
       expect(find.text('Nearby Offline Mode'), findsOneWidget);
       expect(find.text('Searching for nearby CONVO peers...'), findsOneWidget);
+      await tester.scrollUntilVisible(find.text('Nearby Privacy & Consent'), 200);
       expect(find.text('Nearby Privacy & Consent'), findsOneWidget);
+      await tester.scrollUntilVisible(find.text('Smart Offline Queue'), 200);
       expect(find.text('Smart Offline Queue'), findsOneWidget);
       expect(find.text('Queue empty • All messages synced'), findsOneWidget);
     },

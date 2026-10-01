@@ -9,6 +9,7 @@ import '../../../../core/theme/app_typography.dart';
 import '../../../../core/utils/extensions.dart';
 import '../../../../core/widgets/convo_app_bar.dart';
 import '../../../../core/widgets/convo_avatar.dart';
+import '../../../../core/widgets/convo_badge.dart';
 import '../../../../core/widgets/convo_card.dart';
 import '../../../auth/domain/models/convo_user.dart';
 import '../../domain/models/nearby_device.dart';
@@ -136,7 +137,27 @@ class _NearbyScreenState extends ConsumerState<NearbyScreen> {
             children: [
               // Main animated radar mesh illustration
               const NearbyRadarWidget(),
-              const SizedBox(height: AppSpacing.lg),
+              const SizedBox(height: AppSpacing.md),
+
+              // Concept Badges
+              Wrap(
+                alignment: WrapAlignment.center,
+                spacing: AppSpacing.sm,
+                runSpacing: AppSpacing.xs,
+                children: const [
+                  ConvoBadge(
+                    label: 'PEOPLE NEARBY',
+                    variant: ConvoBadgeVariant.primary,
+                    icon: Icons.people_outline_rounded,
+                  ),
+                  ConvoBadge(
+                    label: 'OFFLINE CHAT',
+                    variant: ConvoBadgeVariant.accent,
+                    icon: Icons.wifi_off_rounded,
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.sm),
 
               // Title & Subtitle
               Text(
@@ -160,7 +181,12 @@ class _NearbyScreenState extends ConsumerState<NearbyScreen> {
                 ),
               ),
 
-              const SizedBox(height: AppSpacing.xl),
+              const SizedBox(height: AppSpacing.lg),
+
+              // Offline Chat Concept Highlights Card
+              _buildOfflineChatConceptCard(context),
+
+              const SizedBox(height: AppSpacing.lg),
 
               // Nearby Toggle Switch Card
               ConvoCard(
@@ -278,27 +304,39 @@ class _NearbyScreenState extends ConsumerState<NearbyScreen> {
                 const SizedBox(height: AppSpacing.xl),
               ],
 
-              // Discovered Peers Section (When Enabled)
-              if (nearbyState.isEnabled) ...[
-                _buildSectionHeader('DISCOVERED PEERS NEARBY'),
-                const SizedBox(height: AppSpacing.sm),
-                if (nearbyState.discoveredDevices.isEmpty)
-                  _buildScanningPlaceholder()
-                else
-                  ListView.separated(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: nearbyState.discoveredDevices.length,
-                    separatorBuilder: (_, _) => const SizedBox(height: 8),
-                    itemBuilder: (context, index) {
-                      final device = nearbyState.discoveredDevices[index];
-                      return _buildDiscoveredDeviceTile(
-                        device: device,
-                        onConnect: () => nearbyNotifier.connectToDevice(device),
-                      );
-                    },
+              // People Nearby Discovery Section
+              _buildSectionHeader('PEOPLE NEARBY'),
+              const SizedBox(height: 2),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'DISCOVERED PEERS NEARBY',
+                  style: AppTypography.labelSmall.copyWith(
+                    color: AppColors.accent,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.8,
                   ),
-              ],
+                ),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              if (!nearbyState.isEnabled)
+                _buildDisabledDiscoveryPlaceholder(context)
+              else if (nearbyState.discoveredDevices.isEmpty)
+                _buildScanningPlaceholder()
+              else
+                ListView.separated(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: nearbyState.discoveredDevices.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 8),
+                  itemBuilder: (context, index) {
+                    final device = nearbyState.discoveredDevices[index];
+                    return _buildDiscoveredDeviceTile(
+                      device: device,
+                      onConnect: () => nearbyNotifier.connectToDevice(device),
+                    );
+                  },
+                ),
 
               const SizedBox(height: AppSpacing.xxxl),
             ],
@@ -322,10 +360,116 @@ class _NearbyScreenState extends ConsumerState<NearbyScreen> {
     );
   }
 
-  Widget _buildScanningPlaceholder() {
+  Widget _buildOfflineChatConceptCard(BuildContext context) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(AppSpacing.lg),
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: context.convoColors.surfaceSubtle,
+        borderRadius: AppRadius.borderLg,
+        border: Border.all(
+          color: AppColors.accent.withValues(alpha: 0.2),
+          width: 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: AppColors.accent.withValues(alpha: 0.15),
+                  borderRadius: AppRadius.borderSm,
+                ),
+                child: const Icon(
+                  Icons.offline_bolt_rounded,
+                  color: AppColors.accent,
+                  size: 18,
+                ),
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              Text(
+                'How Offline Chat Works',
+                style: AppTypography.titleMedium.copyWith(
+                  color: context.convoColors.textPrimary,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          _buildConceptBullet(
+            icon: Icons.bluetooth_searching_rounded,
+            title: 'Direct Peer-to-Peer',
+            description: 'Direct radios link nearby devices without cell towers.',
+          ),
+          const SizedBox(height: 6),
+          _buildConceptBullet(
+            icon: Icons.lock_outline_rounded,
+            title: 'Zero Leak Encryption',
+            description: 'Packets are encrypted; no phone numbers or emails exposed.',
+          ),
+          const SizedBox(height: 6),
+          _buildConceptBullet(
+            icon: Icons.sync_rounded,
+            title: 'Smart Queue & Sync',
+            description: 'Messages sync to cloud automatically when back online.',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildConceptBullet({
+    required IconData icon,
+    required String title,
+    required String description,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          icon,
+          size: 16,
+          color: AppColors.accent,
+        ),
+        const SizedBox(width: AppSpacing.xs + 2),
+        Expanded(
+          child: RichText(
+            text: TextSpan(
+              text: '$title: ',
+              style: AppTypography.bodySmall.copyWith(
+                color: context.convoColors.textPrimary,
+                fontWeight: FontWeight.w700,
+                fontSize: 12,
+              ),
+              children: [
+                TextSpan(
+                  text: description,
+                  style: AppTypography.bodySmall.copyWith(
+                    color: context.convoColors.textSecondary,
+                    fontWeight: FontWeight.normal,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDisabledDiscoveryPlaceholder(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.lg,
+        vertical: AppSpacing.xl,
+      ),
       decoration: BoxDecoration(
         color: context.convoColors.surfaceSubtle,
         borderRadius: AppRadius.borderLg,
@@ -333,28 +477,94 @@ class _NearbyScreenState extends ConsumerState<NearbyScreen> {
       ),
       child: Column(
         children: [
-          const SizedBox(
-            width: 24,
-            height: 24,
-            child: CircularProgressIndicator(
-              strokeWidth: 2.5,
-              color: AppColors.accent,
+          Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: context.convoColors.textTertiary.withValues(alpha: 0.12),
+            ),
+            child: Icon(
+              Icons.radar_outlined,
+              color: context.convoColors.textTertiary,
+              size: 24,
             ),
           ),
           const SizedBox(height: AppSpacing.md),
           Text(
-            'Scanning for nearby devices...',
+            'Nearby Discovery Paused',
             style: AppTypography.titleMedium.copyWith(
               color: context.convoColors.textPrimary,
-              fontWeight: FontWeight.w600,
+              fontWeight: FontWeight.w700,
             ),
           ),
           const SizedBox(height: 4),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 300),
+            child: Text(
+              'Turn on Nearby Offline Mode above to discover and message people nearby without internet.',
+              textAlign: TextAlign.center,
+              style: AppTypography.bodySmall.copyWith(
+                color: context.convoColors.textSecondary,
+                height: 1.4,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildScanningPlaceholder() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.lg,
+        vertical: AppSpacing.xl,
+      ),
+      decoration: BoxDecoration(
+        color: context.convoColors.surfaceSubtle,
+        borderRadius: AppRadius.borderLg,
+        border: Border.all(color: context.convoColors.cardBorder),
+      ),
+      child: Column(
+        children: [
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: AppColors.accent.withValues(alpha: 0.15),
+            ),
+            child: const Center(
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.5,
+                  color: AppColors.accent,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: AppSpacing.md),
           Text(
-            'Ensure the other person has CONVO Nearby turned on.',
-            textAlign: TextAlign.center,
-            style: AppTypography.bodySmall.copyWith(
-              color: context.convoColors.textSecondary,
+            'Searching for People Nearby',
+            style: AppTypography.titleMedium.copyWith(
+              color: context.convoColors.textPrimary,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 6),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 300),
+            child: Text(
+              'Nearby people will appear here automatically when the feature is available and active peers are within Bluetooth or Wi-Fi range.',
+              textAlign: TextAlign.center,
+              style: AppTypography.bodySmall.copyWith(
+                color: context.convoColors.textSecondary,
+                height: 1.4,
+              ),
             ),
           ),
         ],

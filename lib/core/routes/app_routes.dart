@@ -14,7 +14,8 @@ class AppRoutes {
   static const String calls = '/calls';
   static const String discover = '/discover';
   static const String profile = '/profile';
-  static const String settings = '/profile/settings';
+  static const String settings = '/settings';
+  static const String profileSettings = '/profile/settings';
 
   // Calling routes
   static const String activeCall = '/call/active';

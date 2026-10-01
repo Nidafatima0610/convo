@@ -109,6 +109,13 @@ class ChatPreferencesService {
     await _prefs.setStringList(_keyPinnedChats, set.toList());
   }
 
+  Future<void> unpinChat(String conversationId) async {
+    if (_prefs == null) return;
+    final set = getPinnedChatIds();
+    set.remove(conversationId);
+    await _prefs.setStringList(_keyPinnedChats, set.toList());
+  }
+
   bool isChatPinned(String conversationId) {
     return getPinnedChatIds().contains(conversationId);
   }
@@ -131,8 +138,38 @@ class ChatPreferencesService {
     await _prefs.setStringList(_keyArchivedChats, set.toList());
   }
 
+  Future<void> unarchiveChat(String conversationId) async {
+    if (_prefs == null) return;
+    final set = getArchivedChatIds();
+    set.remove(conversationId);
+    await _prefs.setStringList(_keyArchivedChats, set.toList());
+  }
+
   bool isChatArchived(String conversationId) {
     return getArchivedChatIds().contains(conversationId);
+  }
+
+  // --- Deleted / Hidden Chats (UI-Level deletion) ---
+  static const String _keyDeletedChats = 'convo_deleted_chats';
+
+  Set<String> getDeletedChatIds() {
+    if (_prefs == null) return {};
+    final list = _prefs.getStringList(_keyDeletedChats) ?? [];
+    return list.toSet();
+  }
+
+  Future<void> deleteChat(String conversationId) async {
+    if (_prefs == null) return;
+    final set = getDeletedChatIds();
+    set.add(conversationId);
+    await _prefs.setStringList(_keyDeletedChats, set.toList());
+  }
+
+  Future<void> restoreChat(String conversationId) async {
+    if (_prefs == null) return;
+    final set = getDeletedChatIds();
+    set.remove(conversationId);
+    await _prefs.setStringList(_keyDeletedChats, set.toList());
   }
 
   // --- Starred Messages ---
@@ -234,6 +271,12 @@ class PinnedChatIdsNotifier extends Notifier<Set<String>> {
     await service.togglePinChat(conversationId);
     state = service.getPinnedChatIds();
   }
+
+  Future<void> unpin(String conversationId) async {
+    final service = ref.read(chatPreferencesServiceProvider);
+    await service.unpinChat(conversationId);
+    state = service.getPinnedChatIds();
+  }
 }
 
 final archivedChatIdsProvider =
@@ -250,6 +293,35 @@ class ArchivedChatIdsNotifier extends Notifier<Set<String>> {
     final service = ref.read(chatPreferencesServiceProvider);
     await service.toggleArchiveChat(conversationId);
     state = service.getArchivedChatIds();
+  }
+
+  Future<void> unarchive(String conversationId) async {
+    final service = ref.read(chatPreferencesServiceProvider);
+    await service.unarchiveChat(conversationId);
+    state = service.getArchivedChatIds();
+  }
+}
+
+final deletedChatIdsProvider =
+    NotifierProvider<DeletedChatIdsNotifier, Set<String>>(DeletedChatIdsNotifier.new);
+
+class DeletedChatIdsNotifier extends Notifier<Set<String>> {
+  @override
+  Set<String> build() {
+    final service = ref.watch(chatPreferencesServiceProvider);
+    return service.getDeletedChatIds();
+  }
+
+  Future<void> deleteChat(String conversationId) async {
+    final service = ref.read(chatPreferencesServiceProvider);
+    await service.deleteChat(conversationId);
+    state = service.getDeletedChatIds();
+  }
+
+  Future<void> restoreChat(String conversationId) async {
+    final service = ref.read(chatPreferencesServiceProvider);
+    await service.restoreChat(conversationId);
+    state = service.getDeletedChatIds();
   }
 }
 

@@ -40,6 +40,9 @@ import '../widgets/convo_emoji_picker.dart';
 import '../widgets/forward_message_sheet.dart';
 import '../../../../services/local_storage/chat_preferences_service.dart';
 import '../widgets/message_bubble.dart';
+import '../widgets/chat_avatar.dart';
+import '../widgets/message_composer.dart';
+import '../widgets/chat_feature_panel.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key, required this.conversationId, this.otherUser});
@@ -89,11 +92,31 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _focusNode.addListener(_onFocusChanged);
     _scrollController.addListener(_onScroll);
 
-    // Mark conversation as read on screen entry
+    // Mark conversation as read on screen entry and ensure 1-to-1 conversation exists
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref
           .read(chatControllerProvider.notifier)
           .markAsRead(widget.conversationId);
+
+      if (widget.otherUser != null) {
+        final currentProfile =
+            ref.read(currentUserProfileProvider).asData?.value;
+        final authUser = ref.read(authStateChangesProvider).asData?.value;
+        if (authUser != null) {
+          final currentUser = currentProfile ??
+              ConvoUser(
+                uid: authUser.uid,
+                name: authUser.displayName ?? 'CONVO User',
+                email: authUser.email ?? '',
+                createdAt: DateTime.now(),
+                updatedAt: DateTime.now(),
+              );
+          ref.read(chatServiceProvider).getOrCreateConversation(
+                currentUser: currentUser,
+                otherUser: widget.otherUser!,
+              );
+        }
+      }
     });
   }
 
@@ -209,10 +232,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _starSelectedMessages() async {
-    final prefs = ref.read(chatPreferencesServiceProvider);
     for (final m in _selectedMessages.values) {
       if (!m.isDeleted) {
-        await prefs.toggleStarMessage(m);
+        await ref.read(starredMessagesProvider.notifier).toggleStar(m);
       }
     }
     if (mounted) {
@@ -297,8 +319,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _toggleStarMessage(MessageModel message) async {
-    final prefs = ref.read(chatPreferencesServiceProvider);
-    await prefs.toggleStarMessage(message);
+    await ref.read(starredMessagesProvider.notifier).toggleStar(message);
   }
 
   void _jumpToMessage(String messageId, List<MessageModel> messages) {
@@ -365,6 +386,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ? currentConv!.participants
         : (receiverId.isNotEmpty ? [receiverId] : <String>[]);
 
+    final currentUserId =
+        ref.read(authStateChangesProvider).asData?.value?.uid ?? '';
+    final replySender = replyingMessage?.senderId == currentUserId
+        ? 'You'
+        : (replyingMessage?.senderName ?? receiverName);
+    final replySnippet = replyingMessage?.isMedia == true
+        ? (replyingMessage!.isImage
+            ? 'Photo'
+            : (replyingMessage.isVideo
+                ? 'Video'
+                : (replyingMessage.isVoice
+                    ? 'Voice message'
+                    : (replyingMessage.isSticker
+                        ? 'Sticker'
+                        : 'Attachment'))))
+        : replyingMessage?.text;
+
     await ref
         .read(chatControllerProvider.notifier)
         .sendMessage(
@@ -375,9 +413,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           senderPhotoUrl: currentUser?.photoUrl,
           text: text,
           replyToMessageId: replyingMessage?.id,
-          replyToSnippet: replyingMessage?.text,
-          replyToSenderName: replyingMessage?.senderName ??
-              (replyingMessage?.senderId == receiverId ? receiverName : 'You'),
+          replyToSnippet: replySnippet,
+          replyToSenderName: replySender,
           expiresAt: expiresAt,
           isSecret: expiresAt != null,
         );
@@ -562,65 +599,73 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ? '${conversation!.moodEmoji} ${conversation.moodLabel}'
           : null,
       isSecretActive: conversation?.isDisappearingActive ?? false,
-      onActionSelected: (action) {
-        switch (action) {
-          case ChatMagicAction.stickers:
-            StickerPickerSheet.show(
-              context,
-              conversationId: widget.conversationId,
-              onStickerSelected: (sticker) =>
-                  _sendSticker(sticker, otherUserId, conversation),
-              onOpenStudio: () => context.push(AppRoutes.stickerStudio),
-            );
-            break;
-          case ChatMagicAction.mood:
-            ChatMoodSheet.show(
-              context,
-              conversationId: widget.conversationId,
-              currentMood: conversation?.mood != null
-                  ? ChatMood.fromMap(conversation!.mood!)
-                  : null,
-            );
-            break;
-          case ChatMagicAction.games:
-            GameLauncherSheet.show(
-              context,
-              conversationId: widget.conversationId,
-              onGameSelected: (game) =>
-                  _sendGame(game, otherUserId, conversation),
-            );
-            break;
-          case ChatMagicAction.voiceEffects:
-            _startVoiceRecording();
-            break;
-          case ChatMagicAction.reactions:
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text(
-                  'Long press any message bubble to trigger animated reactions: ❤️ 😂 👍 😮 😢 🔥 🎉',
-                ),
-                behavior: SnackBarBehavior.floating,
-              ),
-            );
-            break;
-          case ChatMagicAction.capsule:
-            CreateCapsuleDialog.show(
-              context,
-              conversationId: widget.conversationId,
-              receiverId: otherUserId,
-              receiverName: otherUserName,
-              onCapsuleCreated: (capsule) =>
-                  _sendCapsule(capsule, otherUserId, conversation),
-            );
-            break;
-          case ChatMagicAction.secretChat:
-            if (conversation != null) {
-              SecretChatDialog.show(context, conversation);
-            }
-            break;
-        }
-      },
+      onActionSelected: (action) =>
+          _handleMagicAction(action, otherUserId, otherUserName, conversation),
     );
+  }
+
+  void _handleMagicAction(
+    ChatMagicAction action,
+    String otherUserId,
+    String otherUserName,
+    ConversationModel? conversation,
+  ) {
+    switch (action) {
+      case ChatMagicAction.stickers:
+        StickerPickerSheet.show(
+          context,
+          conversationId: widget.conversationId,
+          onStickerSelected: (sticker) =>
+              _sendSticker(sticker, otherUserId, conversation),
+          onOpenStudio: () => context.push(AppRoutes.stickerStudio),
+        );
+        break;
+      case ChatMagicAction.mood:
+        ChatMoodSheet.show(
+          context,
+          conversationId: widget.conversationId,
+          currentMood: conversation?.mood != null
+              ? ChatMood.fromMap(conversation!.mood!)
+              : null,
+        );
+        break;
+      case ChatMagicAction.games:
+        GameLauncherSheet.show(
+          context,
+          conversationId: widget.conversationId,
+          onGameSelected: (game) =>
+              _sendGame(game, otherUserId, conversation),
+        );
+        break;
+      case ChatMagicAction.voiceEffects:
+        _startVoiceRecording();
+        break;
+      case ChatMagicAction.reactions:
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Long press any message bubble to trigger animated reactions: ❤️ 😂 👍 😮 😢 🔥 🎉',
+            ),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        break;
+      case ChatMagicAction.capsule:
+        CreateCapsuleDialog.show(
+          context,
+          conversationId: widget.conversationId,
+          receiverId: otherUserId,
+          receiverName: otherUserName,
+          onCapsuleCreated: (capsule) =>
+              _sendCapsule(capsule, otherUserId, conversation),
+        );
+        break;
+      case ChatMagicAction.secretChat:
+        if (conversation != null) {
+          SecretChatDialog.show(context, conversation);
+        }
+        break;
+    }
   }
 
   Future<void> _sendSticker(
@@ -704,81 +749,44 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   void _showAttachmentOptions(
     String otherUserId,
-    ConversationModel? conversation,
-  ) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (modalContext) => Container(
-        padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.lg,
-          vertical: AppSpacing.md,
-        ),
-        decoration: BoxDecoration(
-          color: context.convoColors.cardBackground,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-          border: Border(
-            top: BorderSide(color: context.convoColors.cardBorder, width: 1),
-          ),
-        ),
-        child: SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 36,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: context.convoColors.cardBorder,
-                  borderRadius: AppRadius.borderPill,
-                ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: [
-                  _AttachmentOptionTile(
-                    icon: Icons.photo_library_rounded,
-                    label: 'Gallery',
-                    color: AppColors.primary,
-                    onTap: () {
-                      Navigator.of(modalContext).pop();
-                      _pickAndSendImage(
-                        ImageSource.gallery,
-                        otherUserId,
-                        conversation,
-                      );
-                    },
-                  ),
-                  _AttachmentOptionTile(
-                    icon: Icons.camera_alt_rounded,
-                    label: 'Camera',
-                    color: AppColors.accent,
-                    onTap: () {
-                      Navigator.of(modalContext).pop();
-                      _pickAndSendImage(
-                        ImageSource.camera,
-                        otherUserId,
-                        conversation,
-                      );
-                    },
-                  ),
-                  _AttachmentOptionTile(
-                    icon: Icons.videocam_rounded,
-                    label: 'Video',
-                    color: AppColors.blueGlow,
-                    onTap: () {
-                      Navigator.of(modalContext).pop();
-                      _pickAndSendVideo(otherUserId, conversation);
-                    },
-                  ),
-                ],
-              ),
-              const SizedBox(height: AppSpacing.md),
-            ],
-          ),
-        ),
-      ),
+    ConversationModel? conversation, [
+    String otherUserName = 'User',
+  ]) {
+    ChatFeaturePanel.show(
+      context,
+      currentMoodLabel: conversation?.hasMood == true
+          ? '${conversation!.moodEmoji} ${conversation.moodLabel}'
+          : null,
+      isSecretActive: conversation?.isDisappearingActive ?? false,
+      onAttachmentSelected: (type) {
+        switch (type) {
+          case ChatAttachmentType.gallery:
+            _pickAndSendImage(
+              ImageSource.gallery,
+              otherUserId,
+              conversation,
+            );
+            break;
+          case ChatAttachmentType.camera:
+            _pickAndSendImage(
+              ImageSource.camera,
+              otherUserId,
+              conversation,
+            );
+            break;
+          case ChatAttachmentType.video:
+            _pickAndSendVideo(otherUserId, conversation);
+            break;
+        }
+      },
+      onFeatureSelected: (action) {
+        _handleMagicAction(
+          action,
+          otherUserId,
+          otherUserName,
+          conversation,
+        );
+      },
     );
   }
 
@@ -802,6 +810,25 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       _uploadProgress = 0.0;
     });
 
+    final replyingMessage = ref.read(replyingMessageProvider);
+    final expiresAt = _calculateExpiresAt(conversation);
+    final caption = _textController.text.trim();
+    if (caption.isNotEmpty) {
+      _textController.clear();
+      setState(() => _canSend = false);
+    }
+
+    final replySender = replyingMessage?.senderId == currentUserId
+        ? 'You'
+        : (replyingMessage?.senderName ?? 'You');
+    final replySnippet = replyingMessage?.isMedia == true
+        ? (replyingMessage!.isImage
+            ? 'Photo'
+            : (replyingMessage.isVideo
+                ? 'Video'
+                : (replyingMessage.isVoice ? 'Voice message' : 'Media')))
+        : replyingMessage?.text;
+
     try {
       final downloadUrl = await mediaService.uploadChatMedia(
         filePath: file.path,
@@ -824,7 +851,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               senderPhotoUrl: currentUser?.photoUrl,
               type: 'image',
               mediaUrl: downloadUrl,
+              text: caption,
               fileName: file.name,
+              replyToMessageId: replyingMessage?.id,
+              replyToSnippet: replySnippet,
+              replyToSenderName: replySender,
+              expiresAt: expiresAt,
+              isSecret: expiresAt != null,
             );
         _scrollToBottom();
       }
@@ -860,6 +893,25 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       _uploadProgress = 0.0;
     });
 
+    final replyingMessage = ref.read(replyingMessageProvider);
+    final expiresAt = _calculateExpiresAt(conversation);
+    final caption = _textController.text.trim();
+    if (caption.isNotEmpty) {
+      _textController.clear();
+      setState(() => _canSend = false);
+    }
+
+    final replySender = replyingMessage?.senderId == currentUserId
+        ? 'You'
+        : (replyingMessage?.senderName ?? 'You');
+    final replySnippet = replyingMessage?.isMedia == true
+        ? (replyingMessage!.isImage
+            ? 'Photo'
+            : (replyingMessage.isVideo
+                ? 'Video'
+                : (replyingMessage.isVoice ? 'Voice message' : 'Media')))
+        : replyingMessage?.text;
+
     try {
       final downloadUrl = await mediaService.uploadChatMedia(
         filePath: file.path,
@@ -882,7 +934,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               senderPhotoUrl: currentUser?.photoUrl,
               type: 'video',
               mediaUrl: downloadUrl,
+              text: caption,
               fileName: file.name,
+              replyToMessageId: replyingMessage?.id,
+              replyToSnippet: replySnippet,
+              replyToSenderName: replySender,
+              expiresAt: expiresAt,
+              isSecret: expiresAt != null,
             );
         _scrollToBottom();
       }
@@ -955,13 +1013,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
     }
 
+    final isDirectId = widget.conversationId.contains('_');
+    final directOtherId = isDirectId
+        ? widget.conversationId
+            .split('_')
+            .firstWhere((id) => id != currentUserId, orElse: () => '')
+        : '';
+
     final conversation = resolvedConv ??
         ConversationModel(
           id: widget.conversationId,
-          type: widget.otherUser != null ? 'direct' : 'group',
+          type: widget.otherUser != null || isDirectId ? 'direct' : 'group',
           participants: widget.otherUser != null
               ? [currentUserId, widget.otherUser!.uid]
-              : [currentUserId],
+              : (isDirectId && directOtherId.isNotEmpty
+                  ? [currentUserId, directOtherId]
+                  : [currentUserId]),
           participantDetails: widget.otherUser != null
               ? {
                   widget.otherUser!.uid: {
@@ -1043,7 +1110,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final paginatedState = ref.watch(
       conversationPaginatedMessagesProvider(widget.conversationId),
     );
-    final replyingMessage = ref.watch(replyingMessageProvider);
 
     final typingUsers = ref.watch(
       conversationTypingUsersProvider(widget.conversationId),
@@ -1163,7 +1229,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       ),
                       child: Row(
                         children: [
-                          ConvoAvatar(
+                          ChatAvatar(
                             initials: isGroup
                                 ? (conversation.name?.isNotEmpty == true
                                       ? (conversation.name!.length >= 2
@@ -1184,13 +1250,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                 ? conversation.photoUrl
                                 : (canSeePhoto ? targetUserObj.photoUrl : null),
                             size: 38,
+                            isGroup: isGroup,
+                            isNearbyConnected: isNearbyConnected,
                             status: isGroup
                                 ? ConvoAvatarStatus.none
-                                : (isNearbyConnected
+                                : (canSeeOnline && isOnline
                                       ? ConvoAvatarStatus.online
-                                      : (canSeeOnline && isOnline
-                                            ? ConvoAvatarStatus.online
-                                            : ConvoAvatarStatus.offline)),
+                                      : ConvoAvatarStatus.offline),
                           ),
                           const SizedBox(width: AppSpacing.sm),
                           Expanded(
@@ -1995,69 +2061,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 ),
               ),
 
-            // Replying Quote Banner
-            if (replyingMessage != null)
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.lg,
-                  vertical: AppSpacing.xs,
-                ),
-                decoration: BoxDecoration(
-                  color: context.convoColors.surfaceSubtle,
-                  border: Border(
-                    top: BorderSide(
-                      color: context.convoColors.cardBorder,
-                      width: 1,
-                    ),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 3,
-                      height: 32,
-                      decoration: BoxDecoration(
-                        color: context.colorScheme.primary,
-                        borderRadius: AppRadius.borderPill,
-                      ),
-                    ),
-                    const SizedBox(width: AppSpacing.sm),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            replyingMessage.senderId == currentUserId
-                                ? 'Replying to Yourself'
-                                : 'Replying to ${replyingMessage.senderName ?? otherUserName}',
-                            style: AppTypography.labelSmall.copyWith(
-                              color: context.colorScheme.primary,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          Text(
-                            replyingMessage.isMedia
-                                ? '[${replyingMessage.type.toUpperCase()}]'
-                                : replyingMessage.text,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: AppTypography.bodySmall.copyWith(
-                              color: context.convoColors.textSecondary,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close_rounded, size: 18),
-                      onPressed: () {
-                        ref.read(replyingMessageProvider.notifier).clear();
-                      },
-                    ),
-                  ],
-                ),
-              ),
-
             // Blocked Banner OR Voice Effect Preview Bar OR Voice Recording Bar OR Normal Composer
             if (isBlockedByMe)
               Container(
@@ -2235,181 +2238,27 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     String otherUserName,
     ConversationModel conversation,
   ) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(
-        AppSpacing.sm,
-        AppSpacing.xs,
-        AppSpacing.sm,
-        AppSpacing.xs,
+    return MessageComposer(
+      controller: _textController,
+      focusNode: _focusNode,
+      canSend: _canSend,
+      showEmojiPicker: _showEmojiPicker,
+      onSend: () => _handleSendMessage(
+        otherUserId,
+        otherUserName,
+        conversation,
       ),
-      decoration: BoxDecoration(
-        color: context.convoColors.cardBackground,
-        border: Border(
-          top: BorderSide(color: context.convoColors.cardBorder, width: 1),
-        ),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          // Emoji Button
-          IconButton(
-            icon: Icon(
-              _showEmojiPicker
-                  ? Icons.keyboard_rounded
-                  : Icons.sentiment_satisfied_alt_rounded,
-              color: _showEmojiPicker
-                  ? context.colorScheme.primary
-                  : context.convoColors.textTertiary,
-              size: 24,
-            ),
-            tooltip: 'Emoji',
-            onPressed: _toggleEmojiPicker,
-          ),
-
-          // Attachment Button
-          IconButton(
-            icon: Icon(
-              Icons.attach_file_rounded,
-              color: context.colorScheme.primary,
-              size: 24,
-            ),
-            tooltip: 'Add attachment',
-            onPressed: () =>
-                _showAttachmentOptions(otherUserId, conversation),
-          ),
-
-          // Chat Magic Hub Button
-          IconButton(
-            icon: const Icon(
-              Icons.auto_awesome_rounded,
-              color: AppColors.primary,
-              size: 24,
-            ),
-            tooltip: 'Chat Magic',
-            onPressed: () =>
-                _openChatMagic(otherUserId, otherUserName, conversation),
-          ),
-
-          // Text Input Field
-          Expanded(
-            child: Container(
-              margin: const EdgeInsets.symmetric(vertical: 4),
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              decoration: BoxDecoration(
-                color: context.convoColors.surfaceSubtle,
-                borderRadius: BorderRadius.circular(22),
-                border: Border.all(
-                  color: context.convoColors.cardBorder,
-                  width: 1,
-                ),
-              ),
-              child: TextField(
-                focusNode: _focusNode,
-                controller: _textController,
-                maxLines: 4,
-                minLines: 1,
-                textCapitalization: TextCapitalization.sentences,
-                decoration: const InputDecoration(
-                  hintText: 'Message...',
-                  border: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                  contentPadding: EdgeInsets.symmetric(vertical: 10),
-                  isDense: true,
-                ),
-              ),
-            ),
-          ),
-
-          const SizedBox(width: AppSpacing.xs),
-
-          // Send Button (when text entered) OR Microphone (when empty)
-          if (_canSend)
-            Container(
-              margin: const EdgeInsets.only(bottom: 4),
-              decoration: BoxDecoration(
-                gradient: AppColors.meshGradient,
-                shape: BoxShape.circle,
-              ),
-              child: IconButton(
-                icon: const Icon(
-                  Icons.send_rounded,
-                  size: 20,
-                  color: Colors.white,
-                ),
-                onPressed: () => _handleSendMessage(
-                  otherUserId,
-                  otherUserName,
-                  conversation,
-                ),
-              ),
-            )
-          else
-            Container(
-              margin: const EdgeInsets.only(bottom: 4),
-              decoration: BoxDecoration(
-                color: context.colorScheme.primary.withValues(alpha: 0.12),
-                shape: BoxShape.circle,
-              ),
-              child: IconButton(
-                icon: Icon(
-                  Icons.mic_rounded,
-                  size: 22,
-                  color: context.colorScheme.primary,
-                ),
-                tooltip: 'Hold or tap to record voice message',
-                onPressed: _startVoiceRecording,
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class _AttachmentOptionTile extends StatelessWidget {
-  const _AttachmentOptionTile({
-    required this.icon,
-    required this.label,
-    required this.color,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final Color color;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: AppRadius.borderMd,
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.sm),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 54,
-              height: 54,
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.14),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(icon, color: color, size: 26),
-            ),
-            const SizedBox(height: AppSpacing.xs),
-            Text(
-              label,
-              style: AppTypography.labelMedium.copyWith(
-                color: context.convoColors.textPrimary,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ),
-      ),
+      onStartVoiceRecord: _startVoiceRecording,
+      onAttachmentTap: () =>
+          _showAttachmentOptions(otherUserId, conversation, otherUserName),
+      onMagicTap: () =>
+          _openChatMagic(otherUserId, otherUserName, conversation),
+      onEmojiToggle: _toggleEmojiPicker,
+      replyingMessage: ref.watch(replyingMessageProvider),
+      currentUserId:
+          ref.read(authStateChangesProvider).asData?.value?.uid ?? '',
+      otherUserName: otherUserName,
+      onReplyClear: () => ref.read(replyingMessageProvider.notifier).clear(),
     );
   }
 }

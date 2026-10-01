@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../services/audio/audio_service.dart';
@@ -370,8 +371,14 @@ final conversationTypingUsersProvider =
 /// with local Smart Offline Queued / Nearby direct messages.
 final conversationCombinedMessagesProvider =
     StreamProvider.family<List<MessageModel>, String>((ref, conversationId) {
+      final initialAsync =
+          ref.watch(conversationMessagesProvider(conversationId));
       final paginatedState =
           ref.watch(conversationPaginatedMessagesProvider(conversationId));
+
+      if (initialAsync.isLoading && paginatedState.messages.isEmpty) {
+        return const Stream.empty();
+      }
       return Stream.value(paginatedState.messages);
     });
 
@@ -534,6 +541,9 @@ class ChatController extends Notifier<AsyncValue<void>> {
             forwardedFrom: forwardedFrom,
           );
         } catch (networkError) {
+          debugPrint(
+            'Notice: direct Firebase write fallback to offline sync for $conversationId: $networkError',
+          );
           // Network unavailable or direct Firebase write failed: fallback to Smart Offline Queue for 1-to-1
           final offlineSync = ref.read(offlineSyncServiceProvider);
           await offlineSync.sendOrQueueMessage(
@@ -1003,6 +1013,18 @@ class ChatController extends Notifier<AsyncValue<void>> {
       await chatService.clearConversationMessages(
         conversationId: conversationId,
       );
+    } catch (e, st) {
+      state = AsyncValue.error(e.toString(), st);
+    }
+  }
+
+  /// Deletes or hides conversation from view and clears unread/pinned state
+  Future<void> deleteConversation(String conversationId) async {
+    try {
+      await clearChat(conversationId);
+      ref.read(pinnedChatIdsProvider.notifier).unpin(conversationId);
+      ref.read(archivedChatIdsProvider.notifier).unarchive(conversationId);
+      await ref.read(deletedChatIdsProvider.notifier).deleteChat(conversationId);
     } catch (e, st) {
       state = AsyncValue.error(e.toString(), st);
     }
