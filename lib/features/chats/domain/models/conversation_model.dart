@@ -81,6 +81,7 @@ class ConversationModel {
 
   /// Generates a deterministic conversation ID for two users.
   static String getConversationId(String uid1, String uid2) {
+    if (uid1 == uid2) return 'self_$uid1';
     final sorted = [uid1, uid2]..sort();
     return '${sorted[0]}_${sorted[1]}';
   }
@@ -89,7 +90,7 @@ class ConversationModel {
   String otherParticipantId(String currentUserId) {
     return participants.firstWhere(
       (uid) => uid != currentUserId,
-      orElse: () => '',
+      orElse: () => currentUserId,
     );
   }
 
@@ -99,6 +100,13 @@ class ConversationModel {
       return name?.trim().isNotEmpty == true ? name! : 'Group Chat';
     }
     final otherId = otherParticipantId(currentUserId);
+    if (otherId == currentUserId && participants.length <= 1) {
+      final details = participantDetails[currentUserId];
+      final myName = details?['name'] as String?;
+      return myName != null && myName.isNotEmpty
+          ? '$myName (You)'
+          : 'Note to Self';
+    }
     final details = participantDetails[otherId];
     return details?['name'] as String? ?? 'CONVO User';
   }

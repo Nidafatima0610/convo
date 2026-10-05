@@ -226,6 +226,91 @@ class _UserSearchModalState extends ConsumerState<UserSearchModal> {
             ),
           ),
 
+          // Note to Self action
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.lg,
+              vertical: AppSpacing.xs,
+            ),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: AppRadius.borderLg,
+                onTap: () {
+                  final currentUserProfile =
+                      ref.read(currentUserProfileProvider).asData?.value;
+                  final authUser =
+                      ref.read(authStateChangesProvider).asData?.value;
+                  if (authUser != null) {
+                    final currentUser = currentUserProfile ??
+                        ConvoUser(
+                          uid: authUser.uid,
+                          name: authUser.displayName ?? 'CONVO User',
+                          email: authUser.email ?? '',
+                          createdAt: DateTime.now(),
+                          updatedAt: DateTime.now(),
+                        );
+                    _startConversation(currentUser);
+                  }
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.md,
+                    vertical: AppSpacing.sm,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.accent.withValues(alpha: 0.08),
+                    borderRadius: AppRadius.borderLg,
+                    border: Border.all(
+                      color: AppColors.accent.withValues(alpha: 0.25),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(AppSpacing.sm),
+                        decoration: const BoxDecoration(
+                          color: AppColors.accent,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.bookmark_added_rounded,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                      ),
+                      const SizedBox(width: AppSpacing.md),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Note to Self',
+                              style: AppTypography.titleMedium.copyWith(
+                                color: context.convoColors.textPrimary,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            Text(
+                              'Send messages, media, or reminders to yourself',
+                              style: AppTypography.bodySmall.copyWith(
+                                color: context.convoColors.textSecondary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Icon(
+                        Icons.chevron_right_rounded,
+                        color: AppColors.accent,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+
           const SizedBox(height: AppSpacing.xs),
 
           // Search Bar

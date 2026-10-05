@@ -173,15 +173,6 @@ class _CreateGroupScreenState extends ConsumerState<CreateGroupScreen> {
       return;
     }
 
-    if (_selectedMembers.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please select at least one member'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      return;
-    }
 
     final currentUserId =
         ref.read(authStateChangesProvider).asData?.value?.uid ?? '';

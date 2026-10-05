@@ -548,17 +548,19 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
 
           final conv = directConversations[index - 1];
           final otherId = conv.otherParticipantId(currentUserId);
-          final otherName = conv.otherParticipantName(currentUserId);
+          final isSelf = otherId == currentUserId && conv.participants.length <= 1;
+          final presence = isSelf ? null : ref.watch(userPresenceProvider(otherId)).asData?.value;
+          final isOnline = presence?.isOnline ?? false;
+          final otherName = (presence?.name.isNotEmpty == true &&
+                  conv.otherParticipantName(currentUserId) == 'CONVO User')
+              ? presence!.name
+              : conv.otherParticipantName(currentUserId);
           final firstName = otherName.trim().split(' ').first;
           final initials = otherName.isNotEmpty
               ? (otherName.length >= 2
                     ? otherName.substring(0, 2).toUpperCase()
                     : otherName[0].toUpperCase())
               : 'CO';
-
-          final presence =
-              ref.watch(userPresenceProvider(otherId)).asData?.value;
-          final isOnline = presence?.isOnline ?? false;
 
           return InkWell(
             onTap: () => _openConversation(conv, currentUserId),
@@ -753,8 +755,9 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
         final name = conv.isGroup
             ? (conv.name ?? 'Group').toLowerCase()
             : conv.otherParticipantName(currentUserId).toLowerCase();
+        final email = conv.otherParticipantEmail(currentUserId).toLowerCase();
         final lastMsg = conv.lastMessage.toLowerCase();
-        return name.contains(query) || lastMsg.contains(query);
+        return name.contains(query) || email.contains(query) || lastMsg.contains(query);
       }).toList();
     }
 
@@ -956,23 +959,35 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
         final isPinned = pinnedIds.contains(conversation.id);
         final isArchived = archivedIds.contains(conversation.id);
         final isMuted = conversation.isMutedFor(currentUserId);
-        final displayName = isGroup
-            ? (conversation.name ?? 'Group')
-            : conversation.otherParticipantName(currentUserId);
         final otherId = isGroup
             ? ''
             : conversation.otherParticipantId(currentUserId);
+        final isSelf = !isGroup && (conversation.participants.length <= 1 || otherId == currentUserId);
 
-        // Watch live presence of other user (only for direct 1-to-1 chats)
-        final otherUserPresence = isGroup
+        // Watch live presence of other user (only for direct 1-to-1 chats with others)
+        final otherUserPresence = (isGroup || isSelf)
             ? null
             : ref.watch(userPresenceProvider(otherId)).asData?.value;
         final currentUserProfile =
             ref.watch(currentUserProfileProvider).asData?.value;
-        final isBlockedByMe = !isGroup &&
+        final isBlockedByMe = !isGroup && !isSelf &&
             (currentUserProfile?.isUserBlocked(otherId) ?? false);
 
+        final rawDisplayName = isGroup
+            ? (conversation.name ?? 'Group')
+            : (isSelf
+                ? ((currentUserProfile?.name.isNotEmpty == true)
+                    ? '${currentUserProfile!.name} (You)'
+                    : 'Note to Self')
+                : conversation.otherParticipantName(currentUserId));
+        final displayName = (!isGroup && !isSelf &&
+                otherUserPresence?.name.isNotEmpty == true &&
+                rawDisplayName == 'CONVO User')
+            ? otherUserPresence!.name
+            : rawDisplayName;
+
         final canSeePhoto = isGroup ||
+            isSelf ||
             otherUserPresence == null ||
             PrivacyHelper.canViewPhoto(
               targetUser: otherUserPresence,
@@ -980,6 +995,7 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
               hasConversation: true,
             );
         final canSeeOnline = !isGroup &&
+            !isSelf &&
             otherUserPresence != null &&
             !isBlockedByMe &&
             PrivacyHelper.canViewOnline(
@@ -991,10 +1007,12 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
 
         final photoUrl = isGroup
             ? conversation.photoUrl
-            : (canSeePhoto
-                ? (otherUserPresence?.photoUrl ??
-                    conversation.otherParticipantPhoto(currentUserId))
-                : null);
+            : (isSelf
+                ? currentUserProfile?.photoUrl
+                : (canSeePhoto
+                    ? (otherUserPresence?.photoUrl ??
+                        conversation.otherParticipantPhoto(currentUserId))
+                    : null));
 
         return ChatPreviewTile(
           conversation: conversation,

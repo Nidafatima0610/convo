@@ -26,28 +26,35 @@ class ChatService {
     required ConvoUser currentUser,
     required ConvoUser otherUser,
   }) async {
-    final conversationId = ConversationModel.getConversationId(
-      currentUser.uid,
-      otherUser.uid,
-    );
+    final isSelf = currentUser.uid == otherUser.uid;
+    final conversationId = isSelf
+        ? 'self_${currentUser.uid}'
+        : ConversationModel.getConversationId(
+            currentUser.uid,
+            otherUser.uid,
+          );
     final docRef = _conversationsRef.doc(conversationId);
     final doc = await docRef.get();
+
+    final details = <String, Map<String, dynamic>>{
+      currentUser.uid: {
+        'name': currentUser.name,
+        'email': currentUser.email,
+        'photoUrl': currentUser.photoUrl,
+      },
+    };
+    if (!isSelf) {
+      details[otherUser.uid] = {
+        'name': otherUser.name,
+        'email': otherUser.email,
+        'photoUrl': otherUser.photoUrl,
+      };
+    }
 
     if (doc.exists && doc.data() != null) {
       // If conversation already exists, update participant details to keep names/photos fresh
       await docRef.set({
-        'participantDetails': {
-          currentUser.uid: {
-            'name': currentUser.name,
-            'email': currentUser.email,
-            'photoUrl': currentUser.photoUrl,
-          },
-          otherUser.uid: {
-            'name': otherUser.name,
-            'email': otherUser.email,
-            'photoUrl': otherUser.photoUrl,
-          },
-        },
+        'participantDetails': details,
       }, SetOptions(merge: true));
 
       final updatedDoc = await docRef.get();
@@ -57,23 +64,16 @@ class ChatService {
     // New conversation
     final newConversation = ConversationModel(
       id: conversationId,
-      participants: [currentUser.uid, otherUser.uid],
-      participantDetails: {
-        currentUser.uid: {
-          'name': currentUser.name,
-          'email': currentUser.email,
-          'photoUrl': currentUser.photoUrl,
-        },
-        otherUser.uid: {
-          'name': otherUser.name,
-          'email': otherUser.email,
-          'photoUrl': otherUser.photoUrl,
-        },
-      },
+      participants: isSelf
+          ? [currentUser.uid]
+          : [currentUser.uid, otherUser.uid],
+      participantDetails: details,
       lastMessage: '',
       lastMessageAt: DateTime.now(),
       lastMessageSenderId: '',
-      unreadCounts: {currentUser.uid: 0, otherUser.uid: 0},
+      unreadCounts: isSelf
+          ? {currentUser.uid: 0}
+          : {currentUser.uid: 0, otherUser.uid: 0},
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
     );
@@ -173,7 +173,13 @@ class ChatService {
 
       final cursorDoc = startAfterDocument ?? _lastStreamDocs[conversationId];
       if (cursorDoc != null) {
-        query = query.startAfterDocument(cursorDoc);
+        try {
+          query = query.startAfterDocument(cursorDoc);
+        } catch (_) {
+          if (startAfterTimestamp != null) {
+            query = query.startAfter([Timestamp.fromDate(startAfterTimestamp)]);
+          }
+        }
       } else if (startAfterTimestamp != null) {
         query = query.startAfter([Timestamp.fromDate(startAfterTimestamp)]);
       }
@@ -316,23 +322,40 @@ class ChatService {
 
     if (!convDoc.exists || convDoc.data() == null) {
       final isGroup = receiverId == 'group';
+      final isSelf = receiverId == senderId;
       final participants = isGroup
           ? (recipientIds ?? [senderId])
-          : [senderId, receiverId];
+          : (isSelf ? [senderId] : [senderId, receiverId]);
       final unreadMap = <String, int>{};
       for (final p in participants) {
         unreadMap[p] = (p == senderId) ? 0 : 1;
       }
 
+      final participantDetails = <String, Map<String, dynamic>>{
+        senderId: {
+          'name': senderName ?? 'CONVO User',
+          'photoUrl': senderPhotoUrl,
+        },
+      };
+
+      if (!isGroup && !isSelf && receiverId.isNotEmpty) {
+        try {
+          final recUserDoc = await _usersRef.doc(receiverId).get();
+          if (recUserDoc.exists && recUserDoc.data() != null) {
+            final recData = recUserDoc.data()!;
+            participantDetails[receiverId] = {
+              'name': recData['name'] ?? 'CONVO User',
+              'email': recData['email'] ?? '',
+              'photoUrl': recData['photoUrl'],
+            };
+          }
+        } catch (_) {}
+      }
+
       batch.set(conversationDocRef, {
         'id': conversationId,
         'participants': participants,
-        'participantDetails': {
-          senderId: {
-            'name': senderName ?? 'CONVO User',
-            'photoUrl': senderPhotoUrl,
-          },
-        },
+        'participantDetails': participantDetails,
         'lastMessage': text.trim(),
         'lastMessageAt': FieldValue.serverTimestamp(),
         'lastMessageSenderId': senderId,
@@ -349,8 +372,12 @@ class ChatService {
         'lastMessageAt': FieldValue.serverTimestamp(),
         'lastMessageSenderId': senderId,
         'updatedAt': FieldValue.serverTimestamp(),
-        'typing.$senderId': FieldValue.delete(),
       };
+
+      final existingTyping = convDoc.data()?['typing'];
+      if (existingTyping is Map && existingTyping.containsKey(senderId)) {
+        convUpdates['typing.$senderId'] = FieldValue.delete();
+      }
 
       var effectiveRecipients = recipientIds;
       if (receiverId == 'group' &&
@@ -368,7 +395,7 @@ class ChatService {
             convUpdates['unreadCounts.$recId'] = FieldValue.increment(1);
           }
         }
-      } else if (receiverId.isNotEmpty && receiverId != 'group') {
+      } else if (receiverId.isNotEmpty && receiverId != 'group' && receiverId != senderId) {
         convUpdates['unreadCounts.$receiverId'] = FieldValue.increment(1);
       }
 
@@ -470,23 +497,40 @@ class ChatService {
 
     if (!convDoc.exists || convDoc.data() == null) {
       final isGroup = receiverId == 'group';
+      final isSelf = receiverId == senderId;
       final participants = isGroup
           ? (recipientIds ?? [senderId])
-          : [senderId, receiverId];
+          : (isSelf ? [senderId] : [senderId, receiverId]);
       final unreadMap = <String, int>{};
       for (final p in participants) {
         unreadMap[p] = (p == senderId) ? 0 : 1;
       }
 
+      final participantDetails = <String, Map<String, dynamic>>{
+        senderId: {
+          'name': senderName ?? 'CONVO User',
+          'photoUrl': senderPhotoUrl,
+        },
+      };
+
+      if (!isGroup && !isSelf && receiverId.isNotEmpty) {
+        try {
+          final recUserDoc = await _usersRef.doc(receiverId).get();
+          if (recUserDoc.exists && recUserDoc.data() != null) {
+            final recData = recUserDoc.data()!;
+            participantDetails[receiverId] = {
+              'name': recData['name'] ?? 'CONVO User',
+              'email': recData['email'] ?? '',
+              'photoUrl': recData['photoUrl'],
+            };
+          }
+        } catch (_) {}
+      }
+
       batch.set(conversationDocRef, {
         'id': conversationId,
         'participants': participants,
-        'participantDetails': {
-          senderId: {
-            'name': senderName ?? 'CONVO User',
-            'photoUrl': senderPhotoUrl,
-          },
-        },
+        'participantDetails': participantDetails,
         'lastMessage': previewText,
         'lastMessageAt': FieldValue.serverTimestamp(),
         'lastMessageSenderId': senderId,
@@ -503,8 +547,12 @@ class ChatService {
         'lastMessageAt': FieldValue.serverTimestamp(),
         'lastMessageSenderId': senderId,
         'updatedAt': FieldValue.serverTimestamp(),
-        'typing.$senderId': FieldValue.delete(),
       };
+
+      final existingTyping = convDoc.data()?['typing'];
+      if (existingTyping is Map && existingTyping.containsKey(senderId)) {
+        convUpdates['typing.$senderId'] = FieldValue.delete();
+      }
 
       var effectiveRecipients = recipientIds;
       if (receiverId == 'group' &&
@@ -522,7 +570,7 @@ class ChatService {
             convUpdates['unreadCounts.$recId'] = FieldValue.increment(1);
           }
         }
-      } else if (receiverId.isNotEmpty && receiverId != 'group') {
+      } else if (receiverId.isNotEmpty && receiverId != 'group' && receiverId != senderId) {
         convUpdates['unreadCounts.$receiverId'] = FieldValue.increment(1);
       }
 
@@ -562,6 +610,9 @@ class ChatService {
     required String currentUserId,
   }) async {
     try {
+      final convDoc = await _conversationsRef.doc(conversationId).get();
+      if (!convDoc.exists) return;
+
       // 1. Clear unread counter on the conversation document
       await _conversationsRef.doc(conversationId).update({
         'unreadCounts.$currentUserId': 0,

@@ -403,7 +403,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         : 'Attachment'))))
         : replyingMessage?.text;
 
-    await ref
+    final success = await ref
         .read(chatControllerProvider.notifier)
         .sendMessage(
           conversationId: widget.conversationId,
@@ -418,6 +418,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           expiresAt: expiresAt,
           isSecret: expiresAt != null,
         );
+
+    if (!success && mounted) {
+      final error = ref.read(chatControllerProvider).error;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(error?.toString() ?? 'Failed to send message.'),
+          backgroundColor: AppColors.error,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
 
     _scrollToBottom();
   }
@@ -1048,34 +1059,53 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final otherUserId =
         widget.otherUser?.uid ??
         (isGroup ? '' : conversation.otherParticipantId(currentUserId));
-    final otherUserName =
+    final isSelfChat = !isGroup && (conversation.participants.length <= 1 || otherUserId == currentUserId);
+
+    final currentUserProfile =
+        ref.watch(currentUserProfileProvider).asData?.value;
+
+    // Live presence stream of other user (only for 1-to-1 chats with others)
+    final otherUserLive = (isGroup || isSelfChat)
+        ? null
+        : ref.watch(userPresenceProvider(otherUserId)).asData?.value;
+    final isOnline =
+        otherUserLive?.isOnline ?? widget.otherUser?.isOnline ?? false;
+
+    final rawOtherName =
         widget.otherUser?.name ??
         (isGroup
             ? (conversation.name ?? 'Group')
-            : conversation.otherParticipantName(currentUserId));
+            : (isSelfChat
+                ? ((currentUserProfile?.name.isNotEmpty == true)
+                    ? '${currentUserProfile!.name} (You)'
+                    : 'Note to Self')
+                : conversation.otherParticipantName(currentUserId)));
+
+    final otherUserName = (!isGroup &&
+            !isSelfChat &&
+            (rawOtherName == 'CONVO User' || rawOtherName.isEmpty) &&
+            otherUserLive?.name.isNotEmpty == true)
+        ? otherUserLive!.name
+        : rawOtherName;
 
     final otherUserObj =
         widget.otherUser ??
         ConvoUser(
           uid: otherUserId,
           name: otherUserName,
-          email: isGroup ? '' : conversation.otherParticipantEmail(currentUserId),
+          email: isGroup
+              ? ''
+              : (isSelfChat
+                  ? (currentUserProfile?.email ?? '')
+                  : conversation.otherParticipantEmail(currentUserId)),
           photoUrl: isGroup
               ? conversation.photoUrl
-              : conversation.otherParticipantPhoto(currentUserId),
+              : (isSelfChat
+                  ? currentUserProfile?.photoUrl
+                  : conversation.otherParticipantPhoto(currentUserId)),
           createdAt: DateTime.now(),
           updatedAt: DateTime.now(),
         );
-
-    // Live presence stream of other user (only for 1-to-1 chats)
-    final otherUserLive = isGroup
-        ? null
-        : ref.watch(userPresenceProvider(otherUserId)).asData?.value;
-    final isOnline =
-        otherUserLive?.isOnline ?? widget.otherUser?.isOnline ?? false;
-
-    final currentUserProfile =
-        ref.watch(currentUserProfileProvider).asData?.value;
     final isBlockedByMe =
         !isGroup && (currentUserProfile?.isUserBlocked(otherUserId) ?? false);
     final targetUserObj = otherUserLive ?? otherUserObj;
@@ -1439,10 +1469,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           setState(() => _isSearching = true);
                         } else if (value == 'gallery') {
                           context.push(
-                            '/chat/${widget.conversationId}/gallery',
+                            '/chat/${widget.conversationId}/media',
                           );
                         } else if (value == 'starred') {
-                          context.push('/starred_messages');
+                          context.push(
+                            AppRoutes.starredMessages,
+                            extra: widget.conversationId,
+                          );
                         } else if (value == 'group_info') {
                           context.push(
                             '/chat/${widget.conversationId}/group_info',

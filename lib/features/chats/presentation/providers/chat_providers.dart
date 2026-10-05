@@ -544,6 +544,11 @@ class ChatController extends Notifier<AsyncValue<void>> {
           debugPrint(
             'Notice: direct Firebase write fallback to offline sync for $conversationId: $networkError',
           );
+          if (networkError is FirebaseException &&
+              (networkError.code == 'permission-denied' ||
+                  networkError.code == 'unauthenticated')) {
+            rethrow;
+          }
           // Network unavailable or direct Firebase write failed: fallback to Smart Offline Queue for 1-to-1
           final offlineSync = ref.read(offlineSyncServiceProvider);
           await offlineSync.sendOrQueueMessage(

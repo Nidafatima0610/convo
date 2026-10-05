@@ -155,11 +155,30 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               return ChatMediaGalleryScreen(conversationId: conversationId);
             },
           ),
+          GoRoute(
+            path: 'gallery',
+            name: 'chatGallery',
+            parentNavigatorKey: rootNavigatorKey,
+            builder: (context, state) {
+              final conversationId =
+                  state.pathParameters['conversationId'] ?? '';
+              return ChatMediaGalleryScreen(conversationId: conversationId);
+            },
+          ),
         ],
       ),
       GoRoute(
         path: AppRoutes.starredMessages,
         name: 'starredMessages',
+        parentNavigatorKey: rootNavigatorKey,
+        builder: (context, state) {
+          final conversationId = state.extra as String?;
+          return StarredMessagesScreen(conversationId: conversationId);
+        },
+      ),
+      GoRoute(
+        path: '/starred_messages',
+        name: 'starredMessagesUnderscore',
         parentNavigatorKey: rootNavigatorKey,
         builder: (context, state) {
           final conversationId = state.extra as String?;
