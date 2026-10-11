@@ -44,31 +44,30 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyAt69IevtL0hIoksb7qUmfOA2GRJxgac20',
-    appId: '1:612562007054:web:ff04b03a766d10187ab85f',
-    messagingSenderId: '612562007054',
-    projectId: 'convo-e3dab',
-    authDomain: 'convo-e3dab.firebaseapp.com',
-    storageBucket: 'convo-e3dab.firebasestorage.app',
-    measurementId: 'G-RHK75T0PZS',
+    apiKey: 'AIzaSyDjlY5dksd2POKTs158HiEdeEkjPLrgfoM',
+    appId: '1:706744683449:web:bf1552452d54a9f0f24468',
+    messagingSenderId: '706744683449',
+    projectId: 'convo-fa95a',
+    authDomain: 'convo-fa95a.firebaseapp.com',
+    storageBucket: 'convo-fa95a.firebasestorage.app',
+    measurementId: 'G-D03E5LFRHR',
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyDh8vFI-MBKD6Wwoq49N0utUNoFv9h7uCo',
-    appId: '1:612562007054:android:f4b1a3ad7fcf8e727ab85f',
-    messagingSenderId: '612562007054',
-    projectId: 'convo-e3dab',
-    storageBucket: 'convo-e3dab.firebasestorage.app',
+    apiKey: 'AIzaSyDQD7MOWRoIWcOiijhdnxTXfW0BIhnSOBo',
+    appId: '1:706744683449:android:18fa87f0b995193df24468',
+    messagingSenderId: '706744683449',
+    projectId: 'convo-fa95a',
+    storageBucket: 'convo-fa95a.firebasestorage.app',
   );
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'AIzaSyBqscpgIyzGAiWzSMDTh-O2RcCv5jmSC-Y',
-    appId: '1:612562007054:ios:8b31975d41830a3b7ab85f',
-    messagingSenderId: '612562007054',
-    projectId: 'convo-e3dab',
-    storageBucket: 'convo-e3dab.firebasestorage.app',
+    apiKey: 'AIzaSyCwGFkb5QxmJA5b_MOCuz09Q9KlOJt6gKs',
+    appId: '1:706744683449:ios:44a0b55c1b149269f24468',
+    messagingSenderId: '706744683449',
+    projectId: 'convo-fa95a',
+    storageBucket: 'convo-fa95a.firebasestorage.app',
     iosBundleId: 'com.example.convo',
   );
-
   static const FirebaseOptions windows = FirebaseOptions(
     apiKey: 'AIzaSyAt69IevtL0hIoksb7qUmfOA2GRJxgac20',
     appId: '1:612562007054:web:02553131ac70e73e7ab85f',

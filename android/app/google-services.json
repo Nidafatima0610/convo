@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "612562007054",
-    "project_id": "convo-e3dab",
-    "storage_bucket": "convo-e3dab.firebasestorage.app"
+    "project_number": "706744683449",
+    "project_id": "convo-fa95a",
+    "storage_bucket": "convo-fa95a.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:612562007054:android:f4b1a3ad7fcf8e727ab85f",
+        "mobilesdk_app_id": "1:706744683449:android:18fa87f0b995193df24468",
         "android_client_info": {
           "package_name": "com.example.convo"
         }
@@ -15,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyDh8vFI-MBKD6Wwoq49N0utUNoFv9h7uCo"
+          "current_key": "AIzaSyDQD7MOWRoIWcOiijhdnxTXfW0BIhnSOBo"
         }
       ],
       "services": {
