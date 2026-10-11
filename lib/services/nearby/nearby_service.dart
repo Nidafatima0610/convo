@@ -166,7 +166,9 @@ class NearbyService {
     }
     _discoveredMap.clear();
     _connectedMap.clear();
-    _statusController.add(NearbyServiceStatus.disabled);
+    if (!_statusController.isClosed) {
+      _statusController.add(NearbyServiceStatus.disabled);
+    }
     _notifyDeviceLists();
   }
 
@@ -409,8 +411,12 @@ class NearbyService {
   }
 
   void _notifyDeviceLists() {
-    _discoveredController.add(List.unmodifiable(_discoveredMap.values));
-    _connectedController.add(List.unmodifiable(_connectedMap.values));
+    if (!_discoveredController.isClosed) {
+      _discoveredController.add(List.unmodifiable(_discoveredMap.values));
+    }
+    if (!_connectedController.isClosed) {
+      _connectedController.add(List.unmodifiable(_connectedMap.values));
+    }
   }
 
   void dispose() {

@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
@@ -41,6 +42,33 @@ class MediaService {
       return file;
     } catch (e) {
       debugPrint('Error picking video: $e');
+      return null;
+    }
+  }
+
+  /// Picks a document file (pdf, doc, docx, txt, xls, xlsx, ppt, pptx, zip) using FilePicker.
+  Future<PlatformFile?> pickDocument() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: [
+          'pdf',
+          'doc',
+          'docx',
+          'txt',
+          'xls',
+          'xlsx',
+          'ppt',
+          'pptx',
+          'zip',
+        ],
+      );
+      if (result != null && result.files.isNotEmpty) {
+        return result.files.first;
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Error picking document: $e');
       return null;
     }
   }

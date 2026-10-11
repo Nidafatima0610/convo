@@ -13,6 +13,7 @@ class OfflineSyncService {
     required this.queueStorage,
     required this.nearbyService,
     FirebaseFirestore? firestore,
+    this.customWriter,
   }) : _customFirestore = firestore {
     _initListeners();
   }
@@ -20,6 +21,7 @@ class OfflineSyncService {
   final OfflineQueueStorageService queueStorage;
   final NearbyService nearbyService;
   final FirebaseFirestore? _customFirestore;
+  final Future<void> Function(QueuedMessage)? customWriter;
 
   OfflineQueueStorageService get _queueStorage => queueStorage;
   NearbyService get _nearbyService => nearbyService;
@@ -32,6 +34,7 @@ class OfflineSyncService {
   Timer? _periodicSyncTimer;
 
   bool get _isFirebaseAvailable {
+    if (customWriter != null) return true;
     try {
       return Firebase.apps.isNotEmpty;
     } catch (_) {
@@ -167,7 +170,11 @@ class OfflineSyncService {
         syncedCount++;
       } catch (e) {
         debugPrint('Sync retry notice for ${message.localMessageId}: $e');
-        break; // Stop iteration if network is unavailable
+        // Record retry count so that queue tracks attempts without message loss
+        await _queueStorage.enqueueMessage(
+          message.copyWith(retryCount: message.retryCount + 1),
+        );
+        break; // Stop iteration if network/auth is unavailable
       }
     }
 
@@ -175,6 +182,12 @@ class OfflineSyncService {
   }
 
   Future<void> _writeToFirebase(QueuedMessage m) async {
+    final writer = customWriter;
+    if (writer != null) {
+      await writer(m);
+      return;
+    }
+
     final conversationDoc = _firestore
         .collection('conversations')
         .doc(m.conversationId);
@@ -182,21 +195,10 @@ class OfflineSyncService {
         .collection('messages')
         .doc(m.localMessageId);
 
-    // Idempotent write using stable localMessageId
-    await messageDoc.set({
-      'id': m.localMessageId,
-      'conversationId': m.conversationId,
-      'senderId': m.senderId,
-      'receiverId': m.receiverId,
-      'text': m.text,
-      'type': m.type,
-      'createdAt': Timestamp.fromDate(m.createdAt),
-      'isRead': false,
-      'offlineOrigin': m.offlineOrigin,
-      'reactions': {},
-    }, SetOptions(merge: true));
-
-    // Update or create conversation metadata
+    // 1. Ensure conversation exists BEFORE message is written.
+    // Under firestore.rules, message creation checks that the sender is in
+    // conversation.data.participants. Creating or updating the conversation
+    // first ensures the security rule succeeds deterministically.
     final convSnap = await conversationDoc.get();
     if (!convSnap.exists || convSnap.data() == null) {
       await conversationDoc.set({
@@ -209,7 +211,7 @@ class OfflineSyncService {
         'type': 'direct',
         'createdAt': Timestamp.fromDate(m.createdAt),
         'updatedAt': FieldValue.serverTimestamp(),
-      });
+      }, SetOptions(merge: true));
     } else {
       await conversationDoc.update({
         'lastMessage': m.text,
@@ -218,6 +220,21 @@ class OfflineSyncService {
         'updatedAt': FieldValue.serverTimestamp(),
       });
     }
+
+    // 2. Now that the parent conversation document exists with sender in participants,
+    // write the message document idempotently using stable localMessageId.
+    await messageDoc.set({
+      'id': m.localMessageId,
+      'conversationId': m.conversationId,
+      'senderId': m.senderId,
+      'receiverId': m.receiverId,
+      'text': m.text,
+      'type': m.type,
+      'createdAt': Timestamp.fromDate(m.createdAt),
+      'isRead': false,
+      'offlineOrigin': m.offlineOrigin,
+      'reactions': {},
+    }, SetOptions(merge: true));
   }
 
   void dispose() {

@@ -84,6 +84,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   // Typing debounce timer
   Timer? _typingTimer;
 
+  // Reply navigation and highlighting
+  final Map<String, GlobalKey> _messageKeys = {};
+  String? _highlightedMessageId;
+  Timer? _highlightTimer;
+  String? _pendingJumpMessageId;
+
   @override
   void initState() {
     super.initState();
@@ -127,6 +133,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
     _recordingTimer?.cancel();
     _typingTimer?.cancel();
+    _highlightTimer?.cancel();
+    _messageKeys.clear();
     _textController.removeListener(_onTextChanged);
     _focusNode.removeListener(_onFocusChanged);
     _scrollController.removeListener(_onScroll);
@@ -322,33 +330,117 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     await ref.read(starredMessagesProvider.notifier).toggleStar(message);
   }
 
-  void _jumpToMessage(String messageId, List<MessageModel> messages) {
+  void _jumpToMessage(String messageId, List<MessageModel> messages) async {
     final index = messages.indexWhere((m) => m.id == messageId);
-    if (index != -1 && _scrollController.hasClients) {
-      final targetOffset = (index * 72.0).clamp(
-        0.0,
-        _scrollController.position.maxScrollExtent,
-      );
-      _scrollController.animateTo(
-        targetOffset,
-        duration: const Duration(milliseconds: 400),
-        curve: Curves.easeInOut,
-      );
+    if (index != -1) {
+      final targetMessage = messages[index];
+      if (targetMessage.isDeleted) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Original message has been deleted.'),
+              behavior: SnackBarBehavior.floating,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+        return;
+      }
+      if (targetMessage.isExpired) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Original secret message has expired and auto-destructed.'),
+              behavior: SnackBarBehavior.floating,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+        return;
+      }
+
+      // Check if widget context is currently mounted in viewport
+      final targetKey = _messageKeys[messageId];
+      if (targetKey?.currentContext != null) {
+        Scrollable.ensureVisible(
+          targetKey!.currentContext!,
+          alignment: 0.5,
+          duration: const Duration(milliseconds: 350),
+          curve: Curves.easeInOutCubic,
+        );
+        _highlightMessage(messageId);
+        return;
+      }
+
+      // If offscreen in ListView.builder, scroll towards estimated position so the widget mounts
+      if (_scrollController.hasClients) {
+        final maxScroll = _scrollController.position.maxScrollExtent;
+        final approxOffset =
+            (index / messages.length * maxScroll).clamp(0.0, maxScroll);
+        await _scrollController.animateTo(
+          approxOffset,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final key = _messageKeys[messageId];
+          if (key?.currentContext != null) {
+            Scrollable.ensureVisible(
+              key!.currentContext!,
+              alignment: 0.5,
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeInOutCubic,
+            );
+          }
+          _highlightMessage(messageId);
+        });
+      }
     } else {
-      ref
-          .read(
-            conversationPaginatedMessagesProvider(
-              widget.conversationId,
-            ).notifier,
-          )
-          .loadMore();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Loading older messages...'),
-          behavior: SnackBarBehavior.floating,
-          duration: Duration(seconds: 1),
-        ),
+      // Message is not in the loaded window; invoke pagination to load older messages
+      final paginatedState = ref.read(
+        conversationPaginatedMessagesProvider(widget.conversationId),
       );
+      if (paginatedState.hasMore) {
+        _pendingJumpMessageId = messageId;
+        ref
+            .read(
+              conversationPaginatedMessagesProvider(
+                widget.conversationId,
+              ).notifier,
+            )
+            .loadMore();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Loading older messages...'),
+              behavior: SnackBarBehavior.floating,
+              duration: Duration(seconds: 1),
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Original message is unavailable or has been deleted.'),
+              behavior: SnackBarBehavior.floating,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  void _highlightMessage(String messageId) {
+    _highlightTimer?.cancel();
+    if (mounted) {
+      setState(() => _highlightedMessageId = messageId);
+      _highlightTimer = Timer(const Duration(milliseconds: 1600), () {
+        if (mounted) {
+          setState(() => _highlightedMessageId = null);
+        }
+      });
     }
   }
 
@@ -788,6 +880,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           case ChatAttachmentType.video:
             _pickAndSendVideo(otherUserId, conversation);
             break;
+          case ChatAttachmentType.document:
+            _pickAndSendDocument(otherUserId, conversation);
+            break;
         }
       },
       onFeatureSelected: (action) {
@@ -968,6 +1063,94 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
+  Future<void> _pickAndSendDocument(
+    String otherUserId,
+    ConversationModel? conversation,
+  ) async {
+    final mediaService = ref.read(mediaServiceProvider);
+    final file = await mediaService.pickDocument();
+    if (file == null || file.path == null) return;
+
+    final currentUserId =
+        ref.read(authStateChangesProvider).asData?.value?.uid ?? '';
+    final currentUser = ref.read(currentUserProfileProvider).asData?.value;
+    final isGroup = conversation?.isGroup == true;
+
+    setState(() {
+      _isUploading = true;
+      _uploadStatusText = 'Uploading document...';
+      _uploadProgress = 0.0;
+    });
+
+    final replyingMessage = ref.read(replyingMessageProvider);
+    final expiresAt = _calculateExpiresAt(conversation);
+
+    final replySender = replyingMessage?.senderId == currentUserId
+        ? 'You'
+        : (replyingMessage?.senderName ?? 'You');
+    final replySnippet = replyingMessage?.isMedia == true
+        ? (replyingMessage!.isImage
+            ? 'Photo'
+            : (replyingMessage.isVideo
+                ? 'Video'
+                : (replyingMessage.isVoice
+                    ? 'Voice message'
+                    : (replyingMessage.isFile ? 'Document' : 'Media'))))
+        : replyingMessage?.text;
+
+    try {
+      final downloadUrl = await mediaService.uploadChatMedia(
+        filePath: file.path!,
+        senderId: currentUserId,
+        conversationId: widget.conversationId,
+        category: 'files',
+        fileName: file.name,
+        mimeType: 'application/octet-stream',
+        onProgress: (p) => setState(() => _uploadProgress = p),
+      );
+
+      if (downloadUrl != null) {
+        await ref
+            .read(chatControllerProvider.notifier)
+            .sendMediaMessage(
+              conversationId: widget.conversationId,
+              receiverId: isGroup ? 'group' : otherUserId,
+              recipientIds: isGroup ? conversation!.participants : [otherUserId],
+              senderName: currentUser?.name,
+              senderPhotoUrl: currentUser?.photoUrl,
+              type: 'file',
+              mediaUrl: downloadUrl,
+              fileName: file.name,
+              fileSize: file.size,
+              text: file.name,
+              replyToMessageId: replyingMessage?.id,
+              replyToSnippet: replySnippet,
+              replyToSenderName: replySender,
+              expiresAt: expiresAt,
+              isSecret: expiresAt != null,
+            );
+
+        if (replyingMessage != null) {
+          ref.read(replyingMessageProvider.notifier).clear();
+        }
+        _scrollToBottom();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to upload document: $e'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isUploading = false);
+      }
+    }
+  }
+
   void _openChatDetails(ConvoUser otherUser) {
     context.push('/chat/${widget.conversationId}/details', extra: otherUser);
   }
@@ -996,6 +1179,42 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(
+      conversationPaginatedMessagesProvider(widget.conversationId),
+      (prev, next) {
+        if (_pendingJumpMessageId != null && !next.isLoadingMore) {
+          final targetId = _pendingJumpMessageId!;
+          final foundIndex = next.messages.indexWhere((m) => m.id == targetId);
+          if (foundIndex != -1) {
+            _pendingJumpMessageId = null;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _jumpToMessage(targetId, next.messages);
+            });
+          } else if (next.hasMore &&
+              (prev?.messages.length != next.messages.length)) {
+            ref
+                .read(
+                  conversationPaginatedMessagesProvider(
+                    widget.conversationId,
+                  ).notifier,
+                )
+                .loadMore();
+          } else {
+            _pendingJumpMessageId = null;
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Original message is unavailable or has been deleted.'),
+                  behavior: SnackBarBehavior.floating,
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            }
+          }
+        }
+      },
+    );
+
     final currentUserId =
         ref.watch(authStateChangesProvider).asData?.value?.uid ?? '';
     final singleConvAsync =
@@ -1986,60 +2205,74 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                 ),
                               ),
                             ),
-                          MessageBubble(
-                            message: message,
-                            isMe: isMe,
-                            currentUserId: currentUserId,
-                            showSenderName: showSenderName,
-                            isStarred: starredMessageIds.contains(message.id),
-                            isSelected:
-                                _selectedMessageIds.contains(message.id),
-                            isSelectionMode: _isSelectionMode,
-                            onToggleSelect: () =>
-                                _toggleMessageSelection(message),
-                            onSelectMessage: () =>
-                                _startSelectionWith(message),
-                            onToggleStar: () => _toggleStarMessage(message),
-                            onReplyTap: (replyId) =>
-                                _jumpToMessage(replyId, messages),
-                            onDeleteForMe: () => ref
-                                .read(chatControllerProvider.notifier)
-                                .deleteMessageForMe(
-                                  conversationId: widget.conversationId,
-                                  messageId: message.id,
-                                ),
-                            onDeleteForEveryone: isMe
-                                ? () => ref
-                                    .read(chatControllerProvider.notifier)
-                                    .deleteMessageForEveryone(
-                                      conversationId: widget.conversationId,
-                                      messageId: message.id,
-                                    )
-                                : null,
-                            onReply: () {
-                              ref
-                                  .read(replyingMessageProvider.notifier)
-                                  .setMessage(message);
-                            },
-                            onReact: (emoji) {
-                              ref
-                                  .read(chatControllerProvider.notifier)
-                                  .toggleReaction(
-                                    conversationId: widget.conversationId,
-                                    messageId: message.id,
-                                    emoji: emoji,
-                                  );
-                            },
-                            onDelete: () {
-                              ref
+                          AnimatedContainer(
+                            duration: const Duration(milliseconds: 300),
+                            decoration: BoxDecoration(
+                              color: _highlightedMessageId == message.id
+                                  ? context.colorScheme.primary
+                                      .withValues(alpha: 0.18)
+                                  : Colors.transparent,
+                              borderRadius: AppRadius.borderMd,
+                            ),
+                            child: MessageBubble(
+                              key: _messageKeys.putIfAbsent(
+                                message.id,
+                                () => GlobalKey(),
+                              ),
+                              message: message,
+                              isMe: isMe,
+                              currentUserId: currentUserId,
+                              showSenderName: showSenderName,
+                              isStarred: starredMessageIds.contains(message.id),
+                              isSelected:
+                                  _selectedMessageIds.contains(message.id),
+                              isSelectionMode: _isSelectionMode,
+                              onToggleSelect: () =>
+                                  _toggleMessageSelection(message),
+                              onSelectMessage: () =>
+                                  _startSelectionWith(message),
+                              onToggleStar: () => _toggleStarMessage(message),
+                              onReplyTap: (replyId) =>
+                                  _jumpToMessage(replyId, messages),
+                              onDeleteForMe: () => ref
                                   .read(chatControllerProvider.notifier)
                                   .deleteMessageForMe(
                                     conversationId: widget.conversationId,
                                     messageId: message.id,
-                                  );
-                            },
-                            onForward: () =>
-                                ForwardMessageSheet.show(context, message),
+                                  ),
+                              onDeleteForEveryone: isMe
+                                  ? () => ref
+                                      .read(chatControllerProvider.notifier)
+                                      .deleteMessageForEveryone(
+                                        conversationId: widget.conversationId,
+                                        messageId: message.id,
+                                      )
+                                  : null,
+                              onReply: () {
+                                ref
+                                    .read(replyingMessageProvider.notifier)
+                                    .setMessage(message);
+                              },
+                              onReact: (emoji) {
+                                ref
+                                    .read(chatControllerProvider.notifier)
+                                    .toggleReaction(
+                                      conversationId: widget.conversationId,
+                                      messageId: message.id,
+                                      emoji: emoji,
+                                    );
+                              },
+                              onDelete: () {
+                                ref
+                                    .read(chatControllerProvider.notifier)
+                                    .deleteMessageForMe(
+                                      conversationId: widget.conversationId,
+                                      messageId: message.id,
+                                    );
+                              },
+                              onForward: () =>
+                                  ForwardMessageSheet.show(context, message),
+                            ),
                           ),
                         ],
                       );

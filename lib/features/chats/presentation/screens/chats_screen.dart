@@ -23,6 +23,8 @@ import '../providers/chat_providers.dart';
 import '../widgets/user_search_modal.dart';
 import '../widgets/chat_preview_tile.dart';
 import '../../../../services/local_storage/chat_preferences_service.dart';
+import '../../../nearby/domain/models/queued_message.dart';
+import '../../../nearby/presentation/providers/nearby_providers.dart';
 
 class ChatsScreen extends ConsumerStatefulWidget {
   const ChatsScreen({super.key});
@@ -741,6 +743,14 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
     final pinnedIds = ref.watch(pinnedChatIdsProvider);
     final archivedIds = ref.watch(archivedChatIdsProvider);
     final deletedIds = ref.watch(deletedChatIdsProvider);
+    final nearbyState = ref.watch(nearbyControllerProvider);
+    final offlineQueueAsync = ref.watch(offlineQueueStreamProvider);
+    final offlineQueue =
+        offlineQueueAsync.asData?.value ?? const <QueuedMessage>[];
+
+    if (_selectedFilterIndex == 3 && offlineQueueAsync.isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
 
     // 1. Filter out archived and deleted conversations from the main chat list (unless actively searching or viewing another tab)
     var filtered = conversations.where((c) {
@@ -748,18 +758,6 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
       if (_searchController.text.trim().isNotEmpty) return true;
       return !archivedIds.contains(c.id);
     }).toList();
-
-    final query = _searchController.text.trim().toLowerCase();
-    if (query.isNotEmpty) {
-      filtered = filtered.where((conv) {
-        final name = conv.isGroup
-            ? (conv.name ?? 'Group').toLowerCase()
-            : conv.otherParticipantName(currentUserId).toLowerCase();
-        final email = conv.otherParticipantEmail(currentUserId).toLowerCase();
-        final lastMsg = conv.lastMessage.toLowerCase();
-        return name.contains(query) || email.contains(query) || lastMsg.contains(query);
-      }).toList();
-    }
 
     // 2. Filter by tab chip
     if (_selectedFilterIndex == 1) {
@@ -771,8 +769,114 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
       // Groups
       filtered = filtered.where((conv) => conv.isGroup).toList();
     } else if (_selectedFilterIndex == 3) {
-      // Mesh placeholder (0 for now)
-      filtered = [];
+      // Mesh tab: genuine local queue & connected nearby peer conversations
+      final queuedConvIds = offlineQueue.map((q) => q.conversationId).toSet();
+      final connectedPeerIds = nearbyState.connectedDevices
+          .map((d) => d.userId ?? d.endpointId)
+          .toSet();
+
+      final existingConvIds = conversations.map((c) => c.id).toSet();
+      final extraLocalConversations = <ConversationModel>[];
+
+      // Reconstruct genuine conversation previews for queued offline conversations not yet in Firestore
+      for (final qConvId in queuedConvIds) {
+        if (!existingConvIds.contains(qConvId)) {
+          final messagesForConv = offlineQueue
+              .where((q) => q.conversationId == qConvId)
+              .toList()
+            ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+          if (messagesForConv.isNotEmpty) {
+            final newest = messagesForConv.first;
+            final otherId = newest.senderId == currentUserId
+                ? newest.receiverId
+                : newest.senderId;
+            final connectedPeer = nearbyState.connectedDevices
+                .where((d) => (d.userId == otherId || d.endpointId == otherId))
+                .firstOrNull;
+            final peerName = connectedPeer?.displayName ??
+                (otherId.startsWith('peer_')
+                    ? 'Nearby Peer'
+                    : (otherId.isEmpty ? 'Offline Contact' : otherId));
+            extraLocalConversations.add(
+              ConversationModel(
+                id: qConvId,
+                participants: [
+                  currentUserId,
+                  if (otherId.isNotEmpty && otherId != currentUserId) otherId
+                ],
+                participantDetails: {
+                  if (otherId.isNotEmpty)
+                    otherId: {
+                      'name': peerName,
+                      'email': 'nearby@convo.mesh',
+                    },
+                },
+                lastMessage: newest.text,
+                lastMessageAt: newest.createdAt,
+                lastMessageSenderId: newest.senderId,
+                unreadCounts: const {},
+                type: 'direct',
+                createdAt: newest.createdAt,
+                updatedAt: newest.createdAt,
+              ),
+            );
+          }
+        }
+      }
+
+      // Include active connected peers as direct mesh conversations
+      for (final peer in nearbyState.connectedDevices) {
+        final peerUserId = peer.userId ?? peer.endpointId;
+        final convId = 'nearby_$peerUserId';
+        if (!existingConvIds.contains(convId) &&
+            !extraLocalConversations.any((c) => c.id == convId)) {
+          extraLocalConversations.add(
+            ConversationModel(
+              id: convId,
+              participants: [currentUserId, peerUserId],
+              participantDetails: {
+                peerUserId: {
+                  'name': peer.displayName,
+                  'email': 'nearby@convo.mesh',
+                },
+              },
+              lastMessage: 'Connected directly via Nearby Mesh',
+              lastMessageAt: DateTime.now(),
+              lastMessageSenderId: peerUserId,
+              unreadCounts: const {},
+              type: 'direct',
+              createdAt: DateTime.now(),
+              updatedAt: DateTime.now(),
+            ),
+          );
+        }
+      }
+
+      filtered = [
+        ...filtered.where(
+          (conv) =>
+              queuedConvIds.contains(conv.id) ||
+              conv.id.startsWith('nearby_') ||
+              conv.participants.any(
+                (p) => connectedPeerIds.contains(p) && p != currentUserId,
+              ),
+        ),
+        ...extraLocalConversations.where((c) => !deletedIds.contains(c.id)),
+      ];
+    }
+
+    final query = _searchController.text.trim().toLowerCase();
+    if (query.isNotEmpty) {
+      filtered = filtered.where((conv) {
+        final name = conv.isGroup
+            ? (conv.name ?? 'Group').toLowerCase()
+            : conv.otherParticipantName(currentUserId).toLowerCase();
+        final email = conv.otherParticipantEmail(currentUserId).toLowerCase();
+        final lastMsg = conv.lastMessage.toLowerCase();
+        return name.contains(query) ||
+            email.contains(query) ||
+            lastMsg.contains(query);
+      }).toList();
     }
 
     // 3. Sort: Pinned conversations at the top, then by updatedAt desc
@@ -872,6 +976,40 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
             icon: Icons.group_work_rounded,
           ),
           onActionPressed: () => context.push(AppRoutes.createGroup),
+        );
+      }
+
+      if (_selectedFilterIndex == 3) {
+        if (!nearbyState.isEnabled) {
+          return ConvoEmptyState(
+            icon: Icons.sensors_off_rounded,
+            title: 'Nearby Mesh Disabled',
+            subtitle:
+                'Enable Nearby Offline Mode to communicate with peers without internet.',
+            badge: const ConvoBadge(
+              label: 'OFFLINE MESH',
+              variant: ConvoBadgeVariant.primary,
+              icon: Icons.sensors_rounded,
+            ),
+            actionLabel: 'Open Nearby Hub',
+            actionIcon: Icons.radar_rounded,
+            onActionPressed: () => context.push(AppRoutes.nearby),
+          );
+        }
+        return ConvoEmptyState(
+          icon: Icons.sensors_rounded,
+          title: 'No Mesh Activity',
+          subtitle: nearbyState.isSearching
+              ? 'Scanning for nearby peers over Bluetooth & Wi-Fi Direct... Offline messages will appear here.'
+              : 'No nearby peers connected and no offline messages currently queued.',
+          badge: const ConvoBadge(
+            label: 'DISCOVERY ACTIVE',
+            variant: ConvoBadgeVariant.accent,
+            icon: Icons.radar_rounded,
+          ),
+          actionLabel: 'Scan for Peers',
+          actionIcon: Icons.search_rounded,
+          onActionPressed: () => context.push(AppRoutes.nearby),
         );
       }
 

@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_radius.dart';
@@ -378,6 +379,8 @@ class MessageBubble extends StatelessWidget {
                       durationMs: message.durationMs,
                       isMe: isMe,
                     )
+                  else if (message.isFile && message.mediaUrl != null)
+                    _buildFileContent(context)
                   else if (message.isSticker)
                     _buildStickerContent(context)
                   else if (message.isGame && message.metadata?['game'] != null)
@@ -642,6 +645,187 @@ class MessageBubble extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  Widget _buildFileContent(BuildContext context) {
+    final fileName = message.fileName ??
+        (message.text.isNotEmpty ? message.text : 'Document');
+    final fileSizeText = _formatFileSize(message.fileSize);
+    final ext = fileName.contains('.')
+        ? fileName.split('.').last.toLowerCase()
+        : '';
+
+    IconData fileIcon;
+    Color fileIconColor;
+
+    switch (ext) {
+      case 'pdf':
+        fileIcon = Icons.picture_as_pdf_rounded;
+        fileIconColor = Colors.redAccent;
+        break;
+      case 'doc':
+      case 'docx':
+        fileIcon = Icons.description_rounded;
+        fileIconColor = Colors.blueAccent;
+        break;
+      case 'xls':
+      case 'xlsx':
+        fileIcon = Icons.table_chart_rounded;
+        fileIconColor = Colors.green;
+        break;
+      case 'ppt':
+      case 'pptx':
+        fileIcon = Icons.slideshow_rounded;
+        fileIconColor = Colors.orange;
+        break;
+      case 'zip':
+      case 'rar':
+        fileIcon = Icons.folder_zip_rounded;
+        fileIconColor = Colors.amber;
+        break;
+      default:
+        fileIcon = Icons.insert_drive_file_rounded;
+        fileIconColor = isMe ? Colors.white : context.colorScheme.primary;
+    }
+
+    return InkWell(
+      onTap: () => _handleOpenFile(context, message.mediaUrl),
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: isMe
+              ? Colors.white.withValues(alpha: 0.15)
+              : context.convoColors.surfaceSubtle,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isMe
+                ? Colors.white.withValues(alpha: 0.25)
+                : context.convoColors.cardBorder,
+            width: 0.8,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: fileIconColor.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(
+                fileIcon,
+                color: fileIconColor,
+                size: 24,
+              ),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            Flexible(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    fileName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTypography.bodyMedium.copyWith(
+                      color: isMe
+                          ? Colors.white
+                          : context.convoColors.textPrimary,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    fileSizeText,
+                    style: AppTypography.labelSmall.copyWith(
+                      color: isMe
+                          ? Colors.white.withValues(alpha: 0.75)
+                          : context.convoColors.textTertiary,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: isMe
+                    ? Colors.white.withValues(alpha: 0.2)
+                    : context.colorScheme.primary.withValues(alpha: 0.1),
+              ),
+              child: Icon(
+                Icons.download_rounded,
+                size: 16,
+                color: isMe ? Colors.white : context.colorScheme.primary,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _handleOpenFile(BuildContext context, String? urlString) async {
+    if (urlString == null || urlString.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('File link is unavailable.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    final uri = Uri.tryParse(urlString.trim());
+    if (uri == null ||
+        !uri.hasScheme ||
+        (!uri.isScheme('http') && !uri.isScheme('https'))) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Invalid file URL.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    try {
+      final launched =
+          await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!launched && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not open file URL.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Unable to open document: $e'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
+  String _formatFileSize(int? bytes) {
+    if (bytes == null || bytes <= 0) return 'Document';
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) {
+      return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    }
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
 
   Widget _buildReplyPreview(BuildContext context, bool isMe) {

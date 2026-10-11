@@ -76,13 +76,16 @@ class ConvoButton extends StatelessWidget {
                     ),
                     const SizedBox(width: AppSpacing.sm),
                   ],
-                  Text(
-                    label,
-                    style: AppTypography.titleMedium.copyWith(
-                      color: isEnabled
-                          ? Colors.white
-                          : context.convoColors.textTertiary,
-                      fontWeight: FontWeight.w600,
+                  Flexible(
+                    child: Text(
+                      label,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTypography.titleMedium.copyWith(
+                        color: isEnabled
+                            ? Colors.white
+                            : context.convoColors.textTertiary,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                 ],

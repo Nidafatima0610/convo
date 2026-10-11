@@ -11,6 +11,7 @@ enum ChatAttachmentType {
   gallery,
   camera,
   video,
+  document,
 }
 
 /// Comprehensive modern attachment and feature panel providing unified entry
@@ -176,6 +177,16 @@ class ChatFeaturePanel extends StatelessWidget {
                 onTap: () {
                   Navigator.pop(context);
                   onAttachmentSelected(ChatAttachmentType.video);
+                },
+              ),
+              FeatureActionItem(
+                title: 'Document',
+                icon: Icons.insert_drive_file_rounded,
+                color: AppColors.accentPurple,
+                isCompact: true,
+                onTap: () {
+                  Navigator.pop(context);
+                  onAttachmentSelected(ChatAttachmentType.document);
                 },
               ),
             ],
