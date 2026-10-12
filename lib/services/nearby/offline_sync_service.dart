@@ -45,7 +45,9 @@ class OfflineSyncService {
   void _initListeners() {
     // 1. Listen for incoming direct offline messages
     _incomingSub = _nearbyService.incomingMessageStream.listen((message) async {
-      debugPrint('Received offline message: ${message.text}');
+      debugPrint(
+        'Received offline message: id=${message.localMessageId}, type=${message.type}',
+      );
       await _queueStorage.enqueueMessage(
         message.copyWith(deliveryState: DeliveryState.deliveredNearby),
       );

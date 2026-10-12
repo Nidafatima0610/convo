@@ -593,7 +593,7 @@ class ChatController extends Notifier<AsyncValue<void>> {
     String? forwardedFrom,
   }) async {
     final currentUser = ref.read(authStateChangesProvider).asData?.value;
-    if (currentUser == null) return false;
+    if (currentUser == null || mediaUrl.trim().isEmpty) return false;
 
     final currentProfile = ref.read(currentUserProfileProvider).asData?.value;
     final effectiveSenderName =

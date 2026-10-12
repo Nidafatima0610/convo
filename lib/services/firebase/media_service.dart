@@ -94,6 +94,12 @@ class MediaService {
         throw Exception('File does not exist: $filePath');
       }
 
+      final fileSize = await file.length();
+      // Enforce Storage rules 50MB limit before beginning network transfer
+      if (fileSize > 50 * 1024 * 1024) {
+        throw Exception('Attachment exceeds 50MB limit');
+      }
+
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final cleanName = fileName.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
       final storagePath =

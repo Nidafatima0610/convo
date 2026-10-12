@@ -513,6 +513,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     if (!success && mounted) {
       final error = ref.read(chatControllerProvider).error;
+      _textController.text = text;
+      _textController.selection = TextSelection.fromPosition(
+        TextPosition(offset: text.length),
+      );
+      setState(() => _canSend = true);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(error?.toString() ?? 'Failed to send message.'),
@@ -633,6 +638,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     VoiceEffectPreset effect,
     ConversationModel? conversation,
   ) async {
+    if (_isUploading) return;
     final currentUserId =
         ref.read(authStateChangesProvider).asData?.value?.uid ?? '';
     final currentUser = ref.read(currentUserProfileProvider).asData?.value;
@@ -901,6 +907,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     String otherUserId,
     ConversationModel? conversation,
   ) async {
+    if (_isUploading) return;
     final mediaService = ref.read(mediaServiceProvider);
     final file = await mediaService.pickImage(source: source);
     if (file == null) return;
@@ -984,6 +991,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     String otherUserId,
     ConversationModel? conversation,
   ) async {
+    if (_isUploading) return;
     final mediaService = ref.read(mediaServiceProvider);
     final file = await mediaService.pickVideo();
     if (file == null) return;
@@ -1067,6 +1075,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     String otherUserId,
     ConversationModel? conversation,
   ) async {
+    if (_isUploading) return;
     final mediaService = ref.read(mediaServiceProvider);
     final file = await mediaService.pickDocument();
     if (file == null || file.path == null) return;
