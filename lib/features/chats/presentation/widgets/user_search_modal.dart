@@ -12,6 +12,7 @@ import '../../../../core/widgets/convo_avatar.dart';
 import '../../../../core/widgets/convo_badge.dart';
 import '../../../auth/domain/models/convo_user.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
+import '../../domain/models/conversation_model.dart';
 import '../providers/chat_providers.dart';
 
 class UserSearchModal extends ConsumerStatefulWidget {
@@ -50,25 +51,49 @@ class _UserSearchModalState extends ConsumerState<UserSearchModal> {
           ?.value;
       final authUser = ref.read(authStateChangesProvider).asData?.value;
 
+      final currentUid = currentUserProfile?.uid ?? authUser?.uid ?? '';
+      if (currentUid.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Please log in to start a conversation.'),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+        return;
+      }
+
       final currentUser =
           currentUserProfile ??
           ConvoUser(
-            uid: authUser?.uid ?? '',
+            uid: currentUid,
             name: authUser?.displayName ?? 'CONVO User',
             email: authUser?.email ?? '',
             createdAt: DateTime.now(),
             updatedAt: DateTime.now(),
           );
 
-      final chatService = ref.read(chatServiceProvider);
-      final conversation = await chatService.getOrCreateConversation(
-        currentUser: currentUser,
-        otherUser: otherUser,
-      );
+      final isSelf = currentUid == otherUser.uid;
+      final deterministicConvId = isSelf
+          ? 'self_$currentUid'
+          : ConversationModel.getConversationId(currentUid, otherUser.uid);
+
+      try {
+        final chatService = ref.read(chatServiceProvider);
+        await chatService.getOrCreateConversation(
+          currentUser: currentUser,
+          otherUser: otherUser,
+        );
+      } catch (e) {
+        debugPrint(
+          'Notice background getOrCreateConversation in search modal: $e',
+        );
+      }
 
       if (mounted) {
         Navigator.of(context).pop();
-        context.push('/chat/${conversation.id}', extra: otherUser);
+        context.push('/chat/$deterministicConvId', extra: otherUser);
       }
     } catch (e) {
       if (mounted) {
@@ -348,37 +373,78 @@ class _UserSearchModalState extends ConsumerState<UserSearchModal> {
                 searchedUsersAsync.when(
                   loading: () =>
                       const Center(child: CircularProgressIndicator()),
-                  error: (err, _) => Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(AppSpacing.xl),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(
-                            Icons.error_outline_rounded,
-                            color: AppColors.error,
-                            size: 40,
-                          ),
-                          const SizedBox(height: AppSpacing.md),
-                          Text(
-                            'Could not search users',
-                            style: AppTypography.titleMedium.copyWith(
-                              color: context.convoColors.textPrimary,
-                              fontWeight: FontWeight.w600,
+                  error: (err, _) {
+                    final errStr = err.toString().toLowerCase();
+                    final isConnectivity = errStr.contains('unavailable') ||
+                        errStr.contains('network') ||
+                        errStr.contains('timeout') ||
+                        errStr.contains('socket');
+                    final isPermission = errStr.contains('permission') ||
+                        errStr.contains('unauthenticated');
+
+                    final icon = isConnectivity
+                        ? Icons.wifi_off_rounded
+                        : isPermission
+                            ? Icons.lock_outline_rounded
+                            : Icons.error_outline_rounded;
+                    final title = isConnectivity
+                        ? 'Connection Unavailable'
+                        : isPermission
+                            ? 'Access Restricted'
+                            : 'Could not search users';
+                    final description = isConnectivity
+                        ? 'Unable to connect to CONVO service. Please check your network connection.'
+                        : isPermission
+                            ? 'You must be signed in with valid permissions to search users.'
+                            : 'A transient error occurred while searching. Tap below to retry.';
+
+                    return Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(AppSpacing.xl),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              icon,
+                              color: isConnectivity ? AppColors.accent : AppColors.error,
+                              size: 40,
                             ),
-                          ),
-                          const SizedBox(height: AppSpacing.xs),
-                          Text(
-                            err.toString(),
-                            textAlign: TextAlign.center,
-                            style: AppTypography.bodySmall.copyWith(
-                              color: context.convoColors.textSecondary,
+                            const SizedBox(height: AppSpacing.md),
+                            Text(
+                              title,
+                              style: AppTypography.titleMedium.copyWith(
+                                color: context.convoColors.textPrimary,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
-                          ),
-                        ],
+                            const SizedBox(height: AppSpacing.xs),
+                            Text(
+                              description,
+                              textAlign: TextAlign.center,
+                              style: AppTypography.bodySmall.copyWith(
+                                color: context.convoColors.textSecondary,
+                              ),
+                            ),
+                            const SizedBox(height: AppSpacing.md),
+                            OutlinedButton.icon(
+                              onPressed: () => ref.invalidate(searchedUsersProvider(_query)),
+                              icon: const Icon(Icons.refresh_rounded, size: 16),
+                              label: const Text('Retry Search'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: context.colorScheme.primary,
+                                side: BorderSide(
+                                  color: context.colorScheme.primary.withValues(alpha: 0.5),
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: AppRadius.borderSm,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                  ),
+                    );
+                  },
                   data: (users) {
                     if (users.isEmpty) {
                       return Center(

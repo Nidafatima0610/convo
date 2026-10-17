@@ -67,6 +67,17 @@ class QueuedMessage {
       createdAt: createdAt,
       isRead: false,
       offlineOrigin: offlineOrigin,
+      uploadStatus: isFailed
+          ? 'failed'
+          : (isQueued
+              ? 'queued'
+              : (isDeliveredNearby
+                  ? 'deliveredNearby'
+                  : 'success')),
+      metadata: {
+        'deliveryState': deliveryState.toValue(),
+        'retryCount': retryCount,
+      },
     );
   }
 

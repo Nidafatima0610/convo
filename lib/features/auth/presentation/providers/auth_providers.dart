@@ -1,4 +1,5 @@
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../services/firebase/auth_service.dart';
@@ -53,14 +54,37 @@ class AuthController extends Notifier<AsyncValue<void>> {
         password: password,
       );
 
-      // Update online presence if user exists
+      // Update online presence if user exists, and ensure user document exists in Firestore
       if (cred.user != null) {
         final firestoreService = ref.read(firestoreServiceProvider);
-        await firestoreService.updateUserOnlineStatus(
-          cred.user!.uid,
-          true,
-          force: true,
-        );
+        try {
+          final existingProfile =
+              await firestoreService.getUserProfile(cred.user!.uid);
+          if (existingProfile == null) {
+            final displayName = (cred.user!.displayName != null &&
+                    cred.user!.displayName!.isNotEmpty)
+                ? cred.user!.displayName!
+                : email.split('@').first;
+            await firestoreService.createUserProfile(
+              ConvoUser(
+                uid: cred.user!.uid,
+                name: displayName,
+                email: email.trim().toLowerCase(),
+                createdAt: DateTime.now(),
+                updatedAt: DateTime.now(),
+                isOnline: true,
+              ),
+            );
+          } else {
+            await firestoreService.updateUserOnlineStatus(
+              cred.user!.uid,
+              true,
+              force: true,
+            );
+          }
+        } catch (e) {
+          debugPrint('Notice ensuring user profile on sign in: $e');
+        }
       }
 
       state = const AsyncValue.data(null);

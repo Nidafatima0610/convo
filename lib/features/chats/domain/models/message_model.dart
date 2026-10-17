@@ -78,6 +78,10 @@ class MessageModel {
   bool get isCapsule => type == 'capsule';
   bool get isMedia => isImage || isVideo || isVoice || isFile;
   bool get isExpired => expiresAt != null && DateTime.now().isAfter(expiresAt!);
+  bool get isQueued => uploadStatus == 'queued' || metadata?['deliveryState'] == 'queued';
+  bool get isSending => uploadStatus == 'uploading' || uploadStatus == 'sending';
+  bool get isFailed => uploadStatus == 'failed' || metadata?['deliveryState'] == 'failed';
+  bool get isDeliveredNearby => uploadStatus == 'deliveredNearby' || metadata?['deliveryState'] == 'deliveredNearby';
 
   /// Returns true if this message is a reply to another message
   bool get isReply => replyToMessageId != null && replyToMessageId!.isNotEmpty;

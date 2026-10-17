@@ -17,6 +17,7 @@ import '../../../auth/domain/models/convo_user.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
 import '../../domain/models/call_model.dart';
 import '../providers/call_providers.dart';
+import '../../../chats/presentation/providers/chat_providers.dart';
 
 class CallsScreen extends ConsumerStatefulWidget {
   const CallsScreen({super.key});
@@ -61,6 +62,33 @@ class _CallsScreenState extends ConsumerState<CallsScreen> {
         .startCall(
           caller: currentConvoUser,
           receiver: receiverUser,
+          type: isVideo ? CallType.video : CallType.voice,
+        );
+
+    if (success && mounted) {
+      context.push('/call/active');
+    }
+  }
+
+  Future<void> _startDirectCallWithUser(
+    ConvoUser user, {
+    required bool isVideo,
+  }) async {
+    final currentConvoUser = ref.read(currentUserProfileProvider).asData?.value;
+    if (currentConvoUser == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please log in to make calls')),
+        );
+      }
+      return;
+    }
+
+    final success = await ref
+        .read(activeCallControllerProvider.notifier)
+        .startCall(
+          caller: currentConvoUser,
+          receiver: user,
           type: isVideo ? CallType.video : CallType.voice,
         );
 
@@ -269,70 +297,13 @@ class _CallsScreenState extends ConsumerState<CallsScreen> {
   void _showStartCallDialog(BuildContext context) {
     showModalBottomSheet(
       context: context,
-      backgroundColor: context.convoColors.cardBackground,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: AppRadius.radiusXl),
-      ),
-      builder: (sheetCtx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.xl),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(AppSpacing.sm),
-                    decoration: BoxDecoration(
-                      color: context.colorScheme.primary.withValues(alpha: 0.12),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      Icons.phone_in_talk_rounded,
-                      color: context.colorScheme.primary,
-                      size: 24,
-                    ),
-                  ),
-                  const SizedBox(width: AppSpacing.md),
-                  Text(
-                    'CONVO Calling',
-                    style: AppTypography.titleLarge.copyWith(
-                      color: context.convoColors.textPrimary,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: AppSpacing.md),
-              Text(
-                'Direct HD voice and encrypted video calling will be activated in an upcoming update.\n\n'
-                '• End-to-end encrypted audio & video channels\n'
-                '• Adaptive bitrate for low bandwidth networks\n'
-                '• Works over Wi-Fi, cellular data, and local mesh',
-                style: AppTypography.bodyMedium.copyWith(
-                  color: context.convoColors.textSecondary,
-                  height: 1.5,
-                ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  onPressed: () => Navigator.of(sheetCtx).pop(),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: context.colorScheme.primary,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: AppRadius.borderMd,
-                    ),
-                  ),
-                  child: const Text('Understood'),
-                ),
-              ),
-            ],
-          ),
-        ),
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetCtx) => _StartCallModal(
+        onStartCall: (user, isVideo) {
+          Navigator.of(sheetCtx).pop();
+          _startDirectCallWithUser(user, isVideo: isVideo);
+        },
       ),
     );
   }
@@ -382,3 +353,254 @@ class _CallsScreenState extends ConsumerState<CallsScreen> {
     );
   }
 }
+
+class _StartCallModal extends ConsumerStatefulWidget {
+  const _StartCallModal({required this.onStartCall});
+
+  final void Function(ConvoUser user, bool isVideo) onStartCall;
+
+  @override
+  ConsumerState<_StartCallModal> createState() => _StartCallModalState();
+}
+
+class _StartCallModalState extends ConsumerState<_StartCallModal> {
+  final TextEditingController _searchController = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final currentUserId =
+        ref.watch(authStateChangesProvider).asData?.value?.uid ?? '';
+    final searchedUsersAsync = ref.watch(searchedUsersProvider(_query));
+
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.75,
+      decoration: BoxDecoration(
+        color: context.convoColors.cardBackground,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        border: Border(
+          top: BorderSide(color: context.convoColors.cardBorder, width: 1),
+        ),
+      ),
+      child: Column(
+        children: [
+          // Drag handle
+          Center(
+            child: Container(
+              margin: const EdgeInsets.only(top: AppSpacing.sm),
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: context.convoColors.cardBorder,
+                borderRadius: AppRadius.borderPill,
+              ),
+            ),
+          ),
+
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.lg,
+              AppSpacing.md,
+              AppSpacing.lg,
+              AppSpacing.sm,
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(AppSpacing.sm),
+                  decoration: BoxDecoration(
+                    color: context.colorScheme.primary.withValues(alpha: 0.12),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    Icons.add_call,
+                    color: context.colorScheme.primary,
+                    size: 22,
+                  ),
+                ),
+                const SizedBox(width: AppSpacing.md),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'New Call',
+                        style: AppTypography.titleLarge.copyWith(
+                          color: context.convoColors.textPrimary,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Choose a contact for voice or video call',
+                        style: AppTypography.bodySmall.copyWith(
+                          color: context.convoColors.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close_rounded),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+              ],
+            ),
+          ),
+
+          // Search Field
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.lg,
+              vertical: AppSpacing.xs,
+            ),
+            child: TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: 'Search people to call...',
+                prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                suffixIcon: _query.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear_rounded, size: 18),
+                        onPressed: () {
+                          _searchController.clear();
+                          setState(() => _query = '');
+                        },
+                      )
+                    : null,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.md,
+                  vertical: 10,
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: AppRadius.borderMd,
+                  borderSide: BorderSide(color: context.convoColors.cardBorder),
+                ),
+              ),
+              onChanged: (val) => setState(() => _query = val.trim()),
+            ),
+          ),
+
+          const SizedBox(height: AppSpacing.sm),
+
+          // User List
+          Expanded(
+            child: searchedUsersAsync.when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (err, _) => Center(
+                child: Text(
+                  'Could not load contacts: $err',
+                  style: TextStyle(color: context.convoColors.textSecondary),
+                ),
+              ),
+              data: (users) {
+                final eligibleUsers =
+                    users.where((u) => u.uid != currentUserId).toList();
+
+                if (eligibleUsers.isEmpty) {
+                  return Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(AppSpacing.xl),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.person_search_rounded,
+                            size: 48,
+                            color: context.convoColors.textTertiary,
+                          ),
+                          const SizedBox(height: AppSpacing.sm),
+                          Text(
+                            _query.isNotEmpty
+                                ? 'No contacts match "$_query"'
+                                : 'No contacts available to call',
+                            style: AppTypography.titleMedium.copyWith(
+                              color: context.convoColors.textPrimary,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }
+
+                return ListView.separated(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.lg,
+                    vertical: AppSpacing.xs,
+                  ),
+                  itemCount: eligibleUsers.length,
+                  separatorBuilder: (_, _) => Divider(
+                    height: 1,
+                    color: context.convoColors.cardBorder.withValues(alpha: 0.5),
+                  ),
+                  itemBuilder: (context, index) {
+                    final user = eligibleUsers[index];
+                    final initials = user.name.isNotEmpty
+                        ? user.name.substring(0, 1).toUpperCase()
+                        : '?';
+
+                    return ListTile(
+                      contentPadding: const EdgeInsets.symmetric(
+                        vertical: 4,
+                        horizontal: 4,
+                      ),
+                      leading: ConvoAvatar(
+                        initials: initials,
+                        photoUrl: user.photoUrl,
+                        size: 42,
+                      ),
+                      title: Text(
+                        user.name,
+                        style: AppTypography.titleMedium.copyWith(
+                          color: context.convoColors.textPrimary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      subtitle: Text(
+                        user.email.isNotEmpty
+                            ? user.email
+                            : (user.bio ?? 'CONVO User'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTypography.bodySmall.copyWith(
+                          color: context.convoColors.textSecondary,
+                        ),
+                      ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.phone_outlined),
+                            color: context.colorScheme.primary,
+                            tooltip: 'Voice Call',
+                            onPressed: () => widget.onStartCall(user, false),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.videocam_outlined),
+                            color: AppColors.accent,
+                            tooltip: 'Video Call',
+                            onPressed: () => widget.onStartCall(user, true),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+

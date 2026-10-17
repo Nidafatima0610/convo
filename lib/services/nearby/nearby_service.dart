@@ -66,6 +66,9 @@ class NearbyService {
   Future<bool> checkAndRequestPermissions() async {
     try {
       if (defaultTargetPlatform != TargetPlatform.android) {
+        debugPrint(
+          '[CONVO_NEARBY] Non-Android platform ($defaultTargetPlatform): permissions assumed granted for testing.',
+        );
         return true; // Graceful fallback on non-Android platforms
       }
 
@@ -74,15 +77,38 @@ class NearbyService {
         Permission.bluetoothScan,
         Permission.bluetoothAdvertise,
         Permission.bluetoothConnect,
+        Permission.nearbyWifiDevices,
       ];
 
       final statuses = await permissions.request();
+      for (final entry in statuses.entries) {
+        debugPrint('[CONVO_NEARBY] Permission ${entry.key}: ${entry.value}');
+      }
+
       final allGranted = statuses.values.every(
         (s) => s.isGranted || s.isLimited,
       );
+
+      try {
+        final locationEnabled =
+            await Permission.location.serviceStatus.isEnabled;
+        debugPrint(
+          '[CONVO_NEARBY] System Location Services Enabled: $locationEnabled',
+        );
+        if (!locationEnabled) {
+          debugPrint(
+            '[CONVO_NEARBY] WARNING: Location Services toggle is OFF in Android system settings! Google Nearby Connections requires Location Service to be enabled.',
+          );
+        }
+      } catch (locErr) {
+        debugPrint(
+          '[CONVO_NEARBY] Notice checking location service status: $locErr',
+        );
+      }
+
       return allGranted;
     } catch (e) {
-      debugPrint('Notice requesting nearby permissions: $e');
+      debugPrint('[CONVO_NEARBY] Notice requesting nearby permissions: $e');
       return true;
     }
   }
@@ -93,8 +119,12 @@ class NearbyService {
     required String displayName,
     required String avatarInitials,
   }) async {
+    debugPrint(
+      '[CONVO_NEARBY] Enabling Nearby Connections for user=$userId, name=$displayName',
+    );
     final granted = await checkAndRequestPermissions();
     if (!granted) {
+      debugPrint('[CONVO_NEARBY] Permissions not fully granted. Aborting enableNearby.');
       _statusController.add(NearbyServiceStatus.error);
       return false;
     }
@@ -115,7 +145,10 @@ class NearbyService {
       _notifyDeviceLists();
 
       // 1. Start Advertising so peers can discover this device
-      await _nearby.startAdvertising(
+      debugPrint(
+        '[CONVO_NEARBY] Starting advertising with serviceId=$_serviceId, strategy=$_strategy...',
+      );
+      final advSuccess = await _nearby.startAdvertising(
         _currentDisplayName,
         _strategy,
         onConnectionInitiated: _handleConnectionInitiated,
@@ -123,13 +156,19 @@ class NearbyService {
         onDisconnected: _handleDisconnected,
         serviceId: _serviceId,
       );
+      debugPrint('[CONVO_NEARBY] startAdvertising completed: $advSuccess');
 
       // 2. Start Discovery to find other nearby peers
-      await _nearby.startDiscovery(
+      debugPrint(
+        '[CONVO_NEARBY] Starting discovery with serviceId=$_serviceId, strategy=$_strategy...',
+      );
+      final discSuccess = await _nearby.startDiscovery(
         _currentDisplayName,
         _strategy,
         onEndpointFound: (endpointId, endpointName, serviceId) {
-          debugPrint('Discovered peer endpoint: $endpointId ($endpointName)');
+          debugPrint(
+            '[CONVO_NEARBY] onEndpointFound: endpointId=$endpointId, endpointName=$endpointName, serviceId=$serviceId',
+          );
           _discoveredMap[endpointId] = NearbyDevice(
             endpointId: endpointId,
             displayName: endpointName,
@@ -139,16 +178,17 @@ class NearbyService {
           _notifyDeviceLists();
         },
         onEndpointLost: (endpointId) {
-          debugPrint('Lost peer endpoint: $endpointId');
+          debugPrint('[CONVO_NEARBY] onEndpointLost: endpointId=$endpointId');
           _discoveredMap.remove(endpointId);
           _notifyDeviceLists();
         },
         serviceId: _serviceId,
       );
+      debugPrint('[CONVO_NEARBY] startDiscovery completed: $discSuccess');
 
       return true;
     } catch (e) {
-      debugPrint('Error enabling Nearby Connections: $e');
+      debugPrint('[CONVO_NEARBY] Error enabling Nearby Connections: $e');
       _statusController.add(NearbyServiceStatus.error);
       return false;
     }
@@ -156,6 +196,7 @@ class NearbyService {
 
   /// Disables Nearby mode and terminates all active connections.
   Future<void> disableNearby() async {
+    debugPrint('[CONVO_NEARBY] Disabling Nearby mode...');
     _isEnabled = false;
     try {
       await _nearby.stopAdvertising();
@@ -175,21 +216,28 @@ class NearbyService {
   /// Initiates connection request to a discovered peer.
   Future<bool> connectToDevice(NearbyDevice device) async {
     try {
+      debugPrint(
+        '[CONVO_NEARBY] Requesting connection to endpoint=${device.endpointId} (${device.displayName})...',
+      );
       _discoveredMap[device.endpointId] = device.copyWith(
         status: NearbyDeviceStatus.connecting,
         isOutgoing: true,
       );
       _notifyDeviceLists();
 
-      return await _nearby.requestConnection(
+      final reqSuccess = await _nearby.requestConnection(
         _currentDisplayName,
         device.endpointId,
         onConnectionInitiated: _handleConnectionInitiated,
         onConnectionResult: _handleConnectionResult,
         onDisconnected: _handleDisconnected,
       );
+      debugPrint(
+        '[CONVO_NEARBY] requestConnection returned: $reqSuccess for endpoint=${device.endpointId}',
+      );
+      return reqSuccess;
     } catch (e) {
-      debugPrint('Error connecting to nearby device: $e');
+      debugPrint('[CONVO_NEARBY] Error connecting to nearby device: $e');
       _discoveredMap[device.endpointId] = device.copyWith(
         status: NearbyDeviceStatus.discovered,
       );
@@ -214,6 +262,9 @@ class NearbyService {
     required QueuedMessage message,
   }) async {
     try {
+      debugPrint(
+        '[CONVO_NEARBY] Sending offline message: id=${message.localMessageId} to endpoint=$endpointId',
+      );
       final payload = {
         'type': 'chat_message',
         'version': _protocolVersion,
@@ -226,7 +277,7 @@ class NearbyService {
       await _nearby.sendBytesPayload(endpointId, bytes);
       return true;
     } catch (e) {
-      debugPrint('Error sending offline message: $e');
+      debugPrint('[CONVO_NEARBY] Error sending offline message to endpoint=$endpointId: $e');
       return false;
     }
   }
@@ -238,28 +289,44 @@ class NearbyService {
     ConnectionInfo connectionInfo,
   ) async {
     debugPrint(
-      'Connection initiated with $endpointId (${connectionInfo.endpointName})',
+      '[CONVO_NEARBY] Connection initiated with endpoint=$endpointId (${connectionInfo.endpointName})',
     );
 
+    // Update discovered map so incoming device UI immediately shows "connecting"
+    final existing = _discoveredMap[endpointId];
+    _discoveredMap[endpointId] = (existing ??
+            NearbyDevice(
+              endpointId: endpointId,
+              displayName: connectionInfo.endpointName,
+              lastSeen: DateTime.now(),
+            ))
+        .copyWith(status: NearbyDeviceStatus.connecting);
+    _notifyDeviceLists();
+
     try {
+      debugPrint('[CONVO_NEARBY] Accepting connection from endpoint=$endpointId...');
       // Auto-accept connection after mutual user intent
       await _nearby.acceptConnection(
         endpointId,
         onPayLoadRecieved: (epId, payload) {
+          debugPrint(
+            '[CONVO_NEARBY] Payload received from epId=$epId, type=${payload.type}',
+          );
           if (payload.type == PayloadType.BYTES && payload.bytes != null) {
             _handleReceivedBytes(epId, payload.bytes!);
           }
         },
       );
     } catch (e) {
-      debugPrint('Error accepting connection: $e');
+      debugPrint('[CONVO_NEARBY] Error accepting connection from endpoint=$endpointId: $e');
     }
   }
 
   void _handleConnectionResult(String endpointId, Status status) async {
-    debugPrint('Connection result for $endpointId: $status');
+    debugPrint('[CONVO_NEARBY] Connection result for endpoint=$endpointId: status=$status');
 
     if (status == Status.CONNECTED) {
+      debugPrint('[CONVO_NEARBY] Endpoint $endpointId successfully CONNECTED!');
       final existing = _discoveredMap[endpointId];
       final connectedDevice =
           (existing ??
@@ -278,6 +345,7 @@ class NearbyService {
       // Send Handshake
       _sendHandshake(endpointId);
     } else {
+      debugPrint('[CONVO_NEARBY] Connection failed/rejected for endpoint=$endpointId');
       _connectedMap.remove(endpointId);
       final existing = _discoveredMap[endpointId];
       if (existing != null) {
@@ -290,7 +358,7 @@ class NearbyService {
   }
 
   void _handleDisconnected(String endpointId) {
-    debugPrint('Endpoint disconnected: $endpointId');
+    debugPrint('[CONVO_NEARBY] Endpoint disconnected: $endpointId. Remaining connected: ${_connectedMap.length - 1}');
     _connectedMap.remove(endpointId);
     if (_connectedMap.isEmpty) {
       _statusController.add(
@@ -304,6 +372,7 @@ class NearbyService {
 
   void _sendHandshake(String endpointId) {
     try {
+      debugPrint('[CONVO_NEARBY] Sending handshake to endpoint=$endpointId');
       final handshake = {
         'type': 'handshake',
         'version': _protocolVersion,
@@ -314,12 +383,13 @@ class NearbyService {
       final bytes = Uint8List.fromList(utf8.encode(jsonEncode(handshake)));
       _nearby.sendBytesPayload(endpointId, bytes);
     } catch (e) {
-      debugPrint('Error sending handshake: $e');
+      debugPrint('[CONVO_NEARBY] Error sending handshake: $e');
     }
   }
 
   void _sendHandshakeAck(String endpointId) {
     try {
+      debugPrint('[CONVO_NEARBY] Sending handshake ACK to endpoint=$endpointId');
       final ack = {
         'type': 'handshake_ack',
         'version': _protocolVersion,
@@ -330,7 +400,7 @@ class NearbyService {
       final bytes = Uint8List.fromList(utf8.encode(jsonEncode(ack)));
       _nearby.sendBytesPayload(endpointId, bytes);
     } catch (e) {
-      debugPrint('Error sending handshake ack: $e');
+      debugPrint('[CONVO_NEARBY] Error sending handshake ack: $e');
     }
   }
 
@@ -342,10 +412,11 @@ class NearbyService {
 
       final type = data['type'] as String?;
       final version = data['version'] as String?;
+      debugPrint('[CONVO_NEARBY] Received payload type=$type from endpoint=$endpointId');
 
       // Validate Protocol Version
       if (version != _protocolVersion) {
-        debugPrint('Rejected incompatible nearby peer protocol: $version');
+        debugPrint('[CONVO_NEARBY] Rejected incompatible nearby peer protocol: $version');
         return;
       }
 
@@ -388,16 +459,18 @@ class NearbyService {
       } else if (type == 'message_ack') {
         final localMessageId = data['localMessageId'] as String?;
         if (localMessageId != null && localMessageId.isNotEmpty) {
+          debugPrint('[CONVO_NEARBY] Received message ACK for messageId=$localMessageId');
           _messageAckController.add(localMessageId);
         }
       }
     } catch (e) {
-      debugPrint('Error processing nearby payload: $e');
+      debugPrint('[CONVO_NEARBY] Error processing nearby payload: $e');
     }
   }
 
   void _sendDeliveryAck(String endpointId, String localMessageId) {
     try {
+      debugPrint('[CONVO_NEARBY] Sending delivery ack for messageId=$localMessageId to endpoint=$endpointId');
       final ack = {
         'type': 'message_ack',
         'version': _protocolVersion,
@@ -406,7 +479,7 @@ class NearbyService {
       final bytes = Uint8List.fromList(utf8.encode(jsonEncode(ack)));
       _nearby.sendBytesPayload(endpointId, bytes);
     } catch (e) {
-      debugPrint('Error sending delivery ack: $e');
+      debugPrint('[CONVO_NEARBY] Error sending delivery ack: $e');
     }
   }
 

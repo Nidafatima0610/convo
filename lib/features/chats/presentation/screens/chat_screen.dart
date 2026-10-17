@@ -89,6 +89,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   String? _highlightedMessageId;
   Timer? _highlightTimer;
   String? _pendingJumpMessageId;
+  bool _showScrollToBottom = false;
 
   @override
   void initState() {
@@ -147,8 +148,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   void _onScroll() {
     if (!_scrollController.hasClients) return;
-    final maxScroll = _scrollController.position.maxScrollExtent;
     final currentScroll = _scrollController.position.pixels;
+    final showBtn = currentScroll > 300;
+    if (showBtn != _showScrollToBottom) {
+      setState(() => _showScrollToBottom = showBtn);
+    }
+    final maxScroll = _scrollController.position.maxScrollExtent;
     // When user scrolls towards older messages (top of reverse ListView), fetch next page
     if (currentScroll >= maxScroll - 250) {
       ref
@@ -391,6 +396,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               duration: const Duration(milliseconds: 200),
               curve: Curves.easeInOutCubic,
             );
+          } else {
+            // For variable-height messages (large images, video previews), allow an extra layout pass
+            Future.delayed(const Duration(milliseconds: 60), () {
+              final retryKey = _messageKeys[messageId];
+              if (retryKey?.currentContext != null) {
+                Scrollable.ensureVisible(
+                  retryKey!.currentContext!,
+                  alignment: 0.5,
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeInOutCubic,
+                );
+              }
+            });
           }
           _highlightMessage(messageId);
         });
@@ -676,7 +694,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               type: 'voice',
               mediaUrl: downloadUrl,
               durationMs: _recordedVoiceDuration * 1000,
-              metadata: {'effect': effect.name},
+              metadata: {
+                'effect': effect.name,
+                'playbackSpeed': effect.playbackSpeed,
+              },
               expiresAt: expiresAt,
               isSecret: expiresAt != null,
             );
@@ -838,6 +859,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   ) async {
     final currentUser = ref.read(currentUserProfileProvider).asData?.value;
     final isGroup = conversation?.isGroup == true;
+
+    // Persist to backend /capsules vault collection
+    try {
+      final chatService = ref.read(chatServiceProvider);
+      await chatService.saveCapsule(capsule);
+    } catch (e) {
+      debugPrint('Notice saving capsule to vault: $e');
+    }
 
     await ref
         .read(chatControllerProvider.notifier)
@@ -1252,20 +1281,47 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
     }
 
-    final isDirectId = widget.conversationId.contains('_');
-    final directOtherId = isDirectId
-        ? widget.conversationId
-            .split('_')
-            .firstWhere((id) => id != currentUserId, orElse: () => '')
-        : '';
+    final isSelfChatId = widget.conversationId.startsWith('self_');
+    final isDirectId = widget.conversationId.contains('_') && !isSelfChatId;
+    String directOtherId = '';
+    if (isSelfChatId) {
+      directOtherId = currentUserId;
+    } else if (isDirectId) {
+      if (currentUserId.isNotEmpty) {
+        if (widget.conversationId.startsWith('${currentUserId}_')) {
+          directOtherId =
+              widget.conversationId.substring(currentUserId.length + 1);
+        } else if (widget.conversationId.endsWith('_$currentUserId')) {
+          directOtherId = widget.conversationId.substring(
+            0,
+            widget.conversationId.length - currentUserId.length - 1,
+          );
+        } else {
+          final parts = widget.conversationId.split('_');
+          directOtherId = parts.firstWhere(
+            (id) => id != currentUserId,
+            orElse: () => '',
+          );
+        }
+      } else {
+        final parts = widget.conversationId.split('_');
+        directOtherId = parts.length >= 2 ? parts[1] : '';
+      }
+    }
 
     final conversation = resolvedConv ??
         ConversationModel(
           id: widget.conversationId,
-          type: widget.otherUser != null || isDirectId ? 'direct' : 'group',
+          type: widget.otherUser != null || isDirectId || isSelfChatId
+              ? 'direct'
+              : 'group',
           participants: widget.otherUser != null
-              ? [currentUserId, widget.otherUser!.uid]
-              : (isDirectId && directOtherId.isNotEmpty
+              ? (widget.otherUser!.uid == currentUserId
+                  ? [currentUserId]
+                  : [currentUserId, widget.otherUser!.uid])
+              : (isDirectId &&
+                      directOtherId.isNotEmpty &&
+                      directOtherId != currentUserId
                   ? [currentUserId, directOtherId]
                   : [currentUserId]),
           participantDetails: widget.otherUser != null
@@ -1276,7 +1332,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     'photoUrl': widget.otherUser!.photoUrl,
                   },
                 }
-              : {},
+              : (directOtherId.isNotEmpty && directOtherId != currentUserId
+                  ? {
+                      directOtherId: {
+                        'name': 'CONVO User',
+                        'email': '',
+                        'photoUrl': null,
+                      },
+                    }
+                  : {}),
           lastMessageAt: DateTime.now(),
           createdAt: DateTime.now(),
           updatedAt: DateTime.now(),
@@ -1284,10 +1348,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     final isGroup = conversation.isGroup;
 
-    final otherUserId =
-        widget.otherUser?.uid ??
-        (isGroup ? '' : conversation.otherParticipantId(currentUserId));
-    final isSelfChat = !isGroup && (conversation.participants.length <= 1 || otherUserId == currentUserId);
+    final otherUserId = widget.otherUser?.uid ??
+        (isGroup
+            ? ''
+            : (isSelfChatId
+                ? currentUserId
+                : (directOtherId.isNotEmpty
+                    ? directOtherId
+                    : conversation.otherParticipantId(currentUserId))));
+    final isSelfChat = isSelfChatId ||
+        (!isGroup &&
+            (conversation.participants.length <= 1 ||
+                otherUserId == currentUserId));
 
     final currentUserProfile =
         ref.watch(currentUserProfileProvider).asData?.value;
@@ -1375,7 +1447,42 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final starredItems = ref.watch(starredMessagesProvider);
     final starredMessageIds = starredItems.map((s) => s.messageId).toSet();
 
-    return Scaffold(
+    return PopScope(
+      canPop: !_isSelectionMode && !_isSearching,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        if (_isSelectionMode) {
+          _clearSelection();
+        } else if (_isSearching) {
+          setState(() {
+            _isSearching = false;
+            _searchQuery = '';
+            _searchController.clear();
+          });
+        }
+      },
+      child: Scaffold(
+      floatingActionButton: _showScrollToBottom
+          ? Padding(
+              padding: const EdgeInsets.only(bottom: 72),
+              child: SizedBox(
+                width: 38,
+                height: 38,
+                child: FloatingActionButton(
+                  mini: true,
+                  elevation: 4,
+                  backgroundColor: context.convoColors.cardBackground,
+                  foregroundColor: context.colorScheme.primary,
+                  onPressed: _scrollToBottom,
+                  tooltip: 'Scroll to bottom',
+                  child: const Icon(
+                    Icons.keyboard_arrow_down_rounded,
+                    size: 24,
+                  ),
+                ),
+              ),
+            )
+          : null,
       appBar: _isSelectionMode
           ? AppBar(
               leading: IconButton(
@@ -1646,23 +1753,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     ),
                   ),
                   actions: [
-                    IconButton(
-                      icon: const Icon(Icons.search_rounded),
-                      tooltip: 'Search in Conversation',
-                      onPressed: () => setState(() => _isSearching = true),
-                    ),
-                    IconButton(
-                      icon: const Icon(
-                        Icons.auto_awesome_rounded,
-                        color: AppColors.primary,
-                      ),
-                      tooltip: 'Chat Magic',
-                      onPressed: () => _openChatMagic(
-                        otherUserId,
-                        otherUserName,
-                        conversation,
-                      ),
-                    ),
                     if (!isGroup) ...[
                       IconButton(
                         icon: const Icon(Icons.phone_outlined),
@@ -1678,22 +1768,29 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       ),
                     ],
                     IconButton(
-                      icon: const Icon(Icons.info_outline_rounded),
-                      tooltip: isGroup ? 'Group Info' : 'Conversation Info',
-                      onPressed: () {
-                        if (isGroup) {
-                          context.push(
-                            '/chat/${widget.conversationId}/group_info',
-                          );
-                        } else {
-                          _openChatDetails(otherUserObj);
-                        }
-                      },
+                      icon: const Icon(
+                        Icons.auto_awesome_rounded,
+                        color: AppColors.primary,
+                      ),
+                      tooltip: 'Chat Magic',
+                      onPressed: () => _openChatMagic(
+                        otherUserId,
+                        otherUserName,
+                        conversation,
+                      ),
                     ),
                     PopupMenuButton<String>(
                       icon: const Icon(Icons.more_vert_rounded),
                       onSelected: (value) async {
-                        if (value == 'search') {
+                        if (value == 'info') {
+                          if (isGroup) {
+                            context.push(
+                              '/chat/${widget.conversationId}/group_info',
+                            );
+                          } else {
+                            _openChatDetails(otherUserObj);
+                          }
+                        } else if (value == 'search') {
                           setState(() => _isSearching = true);
                         } else if (value == 'gallery') {
                           context.push(
@@ -1753,13 +1850,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         }
                       },
                       itemBuilder: (context) => [
+                        PopupMenuItem(
+                          value: 'info',
+                          child: Row(
+                            children: [
+                              const Icon(Icons.info_outline_rounded, size: 20),
+                              const SizedBox(width: 8),
+                              Text(isGroup ? 'Group Info' : 'Contact Details'),
+                            ],
+                          ),
+                        ),
                         const PopupMenuItem(
                           value: 'search',
                           child: Row(
                             children: [
                               Icon(Icons.search_rounded, size: 20),
                               SizedBox(width: 8),
-                              Text('Search'),
+                              Text('Search in Chat'),
                             ],
                           ),
                         ),
@@ -2002,6 +2109,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           style: AppTypography.bodySmall.copyWith(
                             color: context.convoColors.textSecondary,
                           ),
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        FilledButton.tonalIcon(
+                          onPressed: () {
+                            ref.invalidate(
+                              conversationPaginatedMessagesProvider(
+                                widget.conversationId,
+                              ),
+                            );
+                            ref.invalidate(
+                              conversationCombinedMessagesProvider(
+                                widget.conversationId,
+                              ),
+                            );
+                          },
+                          icon: const Icon(Icons.refresh_rounded, size: 18),
+                          label: const Text('Retry'),
                         ),
                       ],
                     ),
@@ -2430,8 +2554,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ],
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 
   Widget _buildRecordingBar(String otherUserId) {
     final minutes = (_recordingSeconds ~/ 60).toString();

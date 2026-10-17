@@ -69,7 +69,7 @@ class FirestoreService {
       if (!isOnline) {
         updates['lastSeen'] = FieldValue.serverTimestamp();
       }
-      await _usersRef.doc(uid).update(updates);
+      await _usersRef.doc(uid).set(updates, SetOptions(merge: true));
     } catch (_) {
       // Non-critical presence update error
     }

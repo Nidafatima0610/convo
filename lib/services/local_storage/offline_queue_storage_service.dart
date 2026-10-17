@@ -125,6 +125,23 @@ class OfflineQueueStorageService {
     await _persistQueue();
   }
 
+  /// Prunes synced messages older than the specified duration to prevent infinite file growth.
+  Future<int> pruneSyncedMessages({
+    Duration olderThan = const Duration(hours: 24),
+  }) async {
+    await loadQueue();
+    final cutoff = DateTime.now().subtract(olderThan);
+    final initialCount = _inMemoryQueue.length;
+    _inMemoryQueue.removeWhere(
+      (m) => m.isSynced && m.createdAt.isBefore(cutoff),
+    );
+    final removed = initialCount - _inMemoryQueue.length;
+    if (removed > 0) {
+      await _persistQueue();
+    }
+    return removed;
+  }
+
   /// Clears the entire offline queue.
   Future<void> clearQueue() async {
     _inMemoryQueue.clear();

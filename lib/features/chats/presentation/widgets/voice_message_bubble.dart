@@ -13,11 +13,15 @@ class VoiceMessageBubble extends ConsumerStatefulWidget {
     required this.audioUrl,
     this.durationMs,
     required this.isMe,
+    this.playbackRate = 1.0,
+    this.effectName,
   });
 
   final String audioUrl;
   final int? durationMs;
   final bool isMe;
+  final double playbackRate;
+  final String? effectName;
 
   @override
   ConsumerState<VoiceMessageBubble> createState() => _VoiceMessageBubbleState();
@@ -46,6 +50,7 @@ class _VoiceMessageBubbleState extends ConsumerState<VoiceMessageBubble> {
       setState(() => _isPlaying = true);
       audioService.playAudio(
         widget.audioUrl,
+        playbackRate: widget.playbackRate,
         onComplete: () {
           if (mounted) {
             setState(() {
@@ -170,14 +175,35 @@ class _VoiceMessageBubbleState extends ConsumerState<VoiceMessageBubble> {
                   ),
                 ),
                 const SizedBox(height: 2),
-                Text(
-                  _formatDuration(displayDuration),
-                  style: AppTypography.labelSmall.copyWith(
-                    color: widget.isMe
-                        ? Colors.white.withValues(alpha: 0.8)
-                        : context.colorScheme.primary,
-                    fontSize: 10,
-                  ),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      _formatDuration(displayDuration),
+                      style: AppTypography.labelSmall.copyWith(
+                        color: widget.isMe
+                            ? Colors.white.withValues(alpha: 0.8)
+                            : context.colorScheme.primary,
+                        fontSize: 10,
+                      ),
+                    ),
+                    if (widget.effectName != null &&
+                        widget.effectName!.isNotEmpty &&
+                        widget.effectName!.toLowerCase() != 'original' &&
+                        widget.effectName!.toLowerCase() != 'normal') ...[
+                      const SizedBox(width: 4),
+                      Text(
+                        '• ${widget.effectName}',
+                        style: AppTypography.labelSmall.copyWith(
+                          color: widget.isMe
+                              ? Colors.white.withValues(alpha: 0.85)
+                              : context.colorScheme.primary,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ],
             ),

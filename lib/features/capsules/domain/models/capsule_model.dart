@@ -83,11 +83,12 @@ class CapsuleModel {
       'senderId': senderId,
       'senderName': senderName,
       'receiverId': receiverId,
+      'recipientId': receiverId,
       'receiverName': receiverName,
       'message': message,
       'mediaUrl': mediaUrl,
-      'unlockAt': Timestamp.fromDate(unlockAt),
-      'createdAt': Timestamp.fromDate(createdAt),
+      'unlockAt': Timestamp.fromDate(unlockAt.toUtc()),
+      'createdAt': Timestamp.fromDate(createdAt.toUtc()),
       'status': status.toValue(),
     };
   }
@@ -114,7 +115,9 @@ class CapsuleModel {
       conversationId: map['conversationId'] as String? ?? '',
       senderId: map['senderId'] as String? ?? '',
       senderName: map['senderName'] as String? ?? 'Sender',
-      receiverId: map['receiverId'] as String? ?? '',
+      receiverId: map['receiverId'] as String? ??
+          map['recipientId'] as String? ??
+          '',
       receiverName: map['receiverName'] as String? ?? 'Receiver',
       message: map['message'] as String? ?? '',
       mediaUrl: map['mediaUrl'] as String?,
@@ -122,6 +125,12 @@ class CapsuleModel {
       createdAt: parseDate(map['createdAt']),
       status: computedStatus,
     );
+  }
+
+  factory CapsuleModel.fromFirestore(
+    DocumentSnapshot<Map<String, dynamic>> doc,
+  ) {
+    return CapsuleModel.fromMap(doc.data() ?? {}, docId: doc.id);
   }
 
   CapsuleModel copyWith({

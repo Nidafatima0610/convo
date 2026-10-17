@@ -23,8 +23,14 @@ class _CapsulesScreenState extends ConsumerState<CapsulesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final conversations =
-        ref.watch(userConversationsProvider).asData?.value ?? [];
+    final capsulesAsync = ref.watch(userCapsulesStreamProvider);
+    final allCapsules = capsulesAsync.asData?.value ?? [];
+
+    final filteredCapsules = allCapsules.where((c) {
+      if (_selectedFilter == 1) return c.isLocked;
+      if (_selectedFilter == 2) return !c.isLocked;
+      return true;
+    }).toList();
 
     return Scaffold(
       appBar: ConvoAppBar(
@@ -85,63 +91,67 @@ class _CapsulesScreenState extends ConsumerState<CapsulesScreen> {
 
             // Capsules List or Explanatory State
             Expanded(
-              child: conversations.isEmpty
-                  ? _buildEmptyState()
-                  : ListView(
-                      padding: const EdgeInsets.all(AppSpacing.lg),
+              child: ListView(
+                padding: const EdgeInsets.all(AppSpacing.lg),
+                children: [
+                  // Educational banner
+                  Container(
+                    padding: const EdgeInsets.all(AppSpacing.md),
+                    decoration: BoxDecoration(
+                      color: AppColors.accentPurple.withValues(alpha: 0.1),
+                      borderRadius: AppRadius.borderMd,
+                      border: Border.all(
+                        color: AppColors.accentPurple.withValues(alpha: 0.25),
+                      ),
+                    ),
+                    child: Row(
                       children: [
-                        // Educational banner
-                        Container(
-                          padding: const EdgeInsets.all(AppSpacing.md),
-                          decoration: BoxDecoration(
-                            color: AppColors.accentPurple.withValues(
-                              alpha: 0.1,
-                            ),
-                            borderRadius: AppRadius.borderMd,
-                            border: Border.all(
-                              color: AppColors.accentPurple.withValues(
-                                alpha: 0.25,
-                              ),
+                        const Icon(
+                          Icons.hourglass_bottom_rounded,
+                          color: AppColors.accentPurple,
+                          size: 28,
+                        ),
+                        const SizedBox(width: AppSpacing.md),
+                        Expanded(
+                          child: Text(
+                            'Message Capsules remain server-locked until their scheduled unlock timestamp. Create one from any chat via the Chat Magic ✨ menu!',
+                            style: AppTypography.bodySmall.copyWith(
+                              color: context.convoColors.textPrimary,
+                              height: 1.4,
                             ),
                           ),
-                          child: Row(
-                            children: [
-                              const Icon(
-                                Icons.hourglass_bottom_rounded,
-                                color: AppColors.accentPurple,
-                                size: 28,
-                              ),
-                              const SizedBox(width: AppSpacing.md),
-                              Expanded(
-                                child: Text(
-                                  'Message Capsules remain server-locked until their scheduled unlock timestamp. Create one from any chat via the Chat Magic ✨ menu!',
-                                  style: AppTypography.bodySmall.copyWith(
-                                    color: context.convoColors.textPrimary,
-                                    height: 1.4,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: AppSpacing.lg),
-
-                        // Example active capsule preview card
-                        _buildCapsulePreviewTile(
-                          title: 'Happy Birthday Celebration! 🎉',
-                          subtitle: 'Scheduled for Jordan Lee',
-                          unlockText: 'Unlocks tomorrow at 9:00 AM',
-                          isLocked: true,
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        _buildCapsulePreviewTile(
-                          title: 'Good luck on your interview! ❤️',
-                          subtitle: 'From Alex Rivera',
-                          unlockText: 'Unlocked • Opened today',
-                          isLocked: false,
                         ),
                       ],
                     ),
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+
+                  if (filteredCapsules.isEmpty)
+                    _buildEmptyState()
+                  else
+                    ...filteredCapsules.map((capsule) {
+                      final title = capsule.isUnlocked
+                          ? capsule.message
+                          : 'Locked Capsule (${capsule.countdownString})';
+                      final subtitle =
+                          'To ${capsule.receiverName} • From ${capsule.senderName}';
+                      final unlockText = capsule.isUnlocked
+                          ? 'Unlocked • Unlocked on ${capsule.unlockAt.day}/${capsule.unlockAt.month}/${capsule.unlockAt.year}'
+                          : 'Unlocks on ${capsule.unlockAt.day}/${capsule.unlockAt.month}/${capsule.unlockAt.year} at ${capsule.unlockAt.hour}:${capsule.unlockAt.minute.toString().padLeft(2, '0')}';
+
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: AppSpacing.md),
+                        child: _buildCapsulePreviewTile(
+                          capsule: capsule,
+                          title: title,
+                          subtitle: subtitle,
+                          unlockText: unlockText,
+                          isLocked: capsule.isLocked,
+                        ),
+                      );
+                    }),
+                ],
+              ),
             ),
           ],
         ),
@@ -193,12 +203,127 @@ class _CapsulesScreenState extends ConsumerState<CapsulesScreen> {
   }
 
   Widget _buildCapsulePreviewTile({
+    required dynamic capsule,
     required String title,
     required String subtitle,
     required String unlockText,
     required bool isLocked,
   }) {
     return ConvoCard(
+      onTap: () {
+        if (capsule.isUnlocked) {
+          // Persist opened status in Firestore
+          ref.read(chatServiceProvider).markCapsuleOpened(capsule.id);
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: context.convoColors.cardBackground,
+              shape: RoundedRectangleBorder(borderRadius: AppRadius.borderXl),
+              title: Row(
+                children: [
+                  const Icon(Icons.lock_open_rounded, color: AppColors.success),
+                  const SizedBox(width: AppSpacing.sm),
+                  Text(
+                    'Capsule Unlocked! 🎉',
+                    style: AppTypography.titleLarge.copyWith(
+                      color: context.convoColors.textPrimary,
+                    ),
+                  ),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'From ${capsule.senderName} to ${capsule.receiverName}',
+                    style: AppTypography.labelMedium.copyWith(
+                      color: context.convoColors.textSecondary,
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(AppSpacing.md),
+                    decoration: BoxDecoration(
+                      color: context.convoColors.surfaceSubtle,
+                      borderRadius: AppRadius.borderMd,
+                      border: Border.all(
+                        color: AppColors.success.withValues(alpha: 0.3),
+                      ),
+                    ),
+                    child: Text(
+                      capsule.message,
+                      style: AppTypography.bodyLarge.copyWith(
+                        color: context.convoColors.textPrimary,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.sm),
+                  Text(
+                    'Unlocked at ${capsule.unlockAt.day}/${capsule.unlockAt.month}/${capsule.unlockAt.year}',
+                    style: AppTypography.labelSmall.copyWith(
+                      color: context.convoColors.textTertiary,
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                FilledButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('Close'),
+                ),
+              ],
+            ),
+          );
+        } else {
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: context.convoColors.cardBackground,
+              shape: RoundedRectangleBorder(borderRadius: AppRadius.borderXl),
+              title: Row(
+                children: [
+                  const Icon(Icons.lock_clock_rounded, color: AppColors.accentPurple),
+                  const SizedBox(width: AppSpacing.sm),
+                  Text(
+                    'Locked Capsule ⏳',
+                    style: AppTypography.titleLarge.copyWith(
+                      color: context.convoColors.textPrimary,
+                    ),
+                  ),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'This capsule remains securely locked until its scheduled unlock time.',
+                    style: AppTypography.bodyMedium.copyWith(
+                      color: context.convoColors.textSecondary,
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+                  Text(
+                    capsule.countdownString,
+                    style: AppTypography.titleMedium.copyWith(
+                      color: AppColors.accentPurple,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
+          );
+        }
+      },
       child: Row(
         children: [
           Container(

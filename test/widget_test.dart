@@ -121,25 +121,26 @@ void main() {
       expect(find.text(AppConstants.appName), findsOneWidget);
       expect(find.text(AppStrings.chatsEmptyTitle), findsOneWidget);
 
-      // Verify bottom navigation tabs exist (Chats, Nearby, Calls, Settings)
+      // Verify bottom navigation tabs exist (Chats, Nearby, Calls, Discover, Profile)
       expect(find.text(AppStrings.navChats), findsOneWidget);
       expect(find.text(AppStrings.navNearby), findsOneWidget);
       expect(find.text(AppStrings.navCalls), findsOneWidget);
-      expect(find.text(AppStrings.navSettings), findsOneWidget);
+      expect(find.text(AppStrings.navDiscover), findsOneWidget);
+      expect(find.text(AppStrings.navProfile), findsOneWidget);
 
-      // Navigate to Settings tab
-      await tester.tap(find.byIcon(Icons.settings_outlined));
+      // Navigate to Profile tab
+      await tester.tap(find.byIcon(Icons.person_outline_rounded));
       await tester.pumpAndSettle();
 
-      // Verify authenticated user details from Firestore and settings are displayed
+      // Verify authenticated user details from Firestore are displayed
       expect(find.text('Alex Rivera'), findsOneWidget);
       expect(find.text('alex@convo.app'), findsOneWidget);
-      expect(find.text(AppStrings.settingsTitle), findsAtLeastNWidgets(1));
-
-      // Verify Profile details are accessible by tapping user profile card
-      await tester.tap(find.text('Alex Rivera'));
-      await tester.pumpAndSettle();
       expect(find.text('Sign Out'), findsOneWidget);
+
+      // Verify Settings is accessible from Profile
+      await tester.tap(find.byIcon(Icons.settings_outlined).first);
+      await tester.pumpAndSettle();
+      expect(find.text(AppStrings.settingsTitle), findsAtLeastNWidgets(1));
     },
   );
 

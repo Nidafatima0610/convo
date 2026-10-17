@@ -15,6 +15,10 @@ class AudioService {
   late final AudioRecorder _recorder;
   late final AudioPlayer _player;
 
+  StreamSubscription<void>? _completeSubscription;
+  StreamSubscription<Duration>? _positionSubscription;
+  StreamSubscription<Duration>? _durationSubscription;
+
   DateTime? _recordingStartTime;
 
   bool _isRecording = false;
@@ -119,14 +123,25 @@ class AudioService {
     try {
       await _player.stop();
 
+      // Clean up previous listeners to prevent subscription leaks
+      await _completeSubscription?.cancel();
+      _completeSubscription = null;
+      await _positionSubscription?.cancel();
+      _positionSubscription = null;
+      await _durationSubscription?.cancel();
+      _durationSubscription = null;
+
       if (onComplete != null) {
-        _player.onPlayerComplete.listen((_) => onComplete());
+        _completeSubscription =
+            _player.onPlayerComplete.listen((_) => onComplete());
       }
       if (onPositionChanged != null) {
-        _player.onPositionChanged.listen(onPositionChanged);
+        _positionSubscription =
+            _player.onPositionChanged.listen(onPositionChanged);
       }
       if (onDurationChanged != null) {
-        _player.onDurationChanged.listen(onDurationChanged);
+        _durationSubscription =
+            _player.onDurationChanged.listen(onDurationChanged);
       }
 
       final source = url.startsWith('http')
@@ -134,9 +149,8 @@ class AudioService {
           : DeviceFileSource(url);
 
       await _player.play(source);
-      if (playbackRate != 1.0) {
-        await _player.setPlaybackRate(playbackRate);
-      }
+      // Always enforce the exact playback rate (including 1.0 to reset normal-speed playback)
+      await _player.setPlaybackRate(playbackRate);
     } catch (e) {
       debugPrint('Error playing audio: $e');
       onComplete?.call();
@@ -178,6 +192,9 @@ class AudioService {
   Future<void> stop() => stopAudio();
 
   void dispose() {
+    _completeSubscription?.cancel();
+    _positionSubscription?.cancel();
+    _durationSubscription?.cancel();
     _recorder.dispose();
     _player.dispose();
   }

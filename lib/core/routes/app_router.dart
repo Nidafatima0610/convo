@@ -41,8 +41,10 @@ final GlobalKey<NavigatorState> _nearbyNavigatorKey = GlobalKey<NavigatorState>(
 final GlobalKey<NavigatorState> _callsNavigatorKey = GlobalKey<NavigatorState>(
   debugLabel: 'callsNav',
 );
-final GlobalKey<NavigatorState> _settingsNavigatorKey =
-    GlobalKey<NavigatorState>(debugLabel: 'settingsNav');
+final GlobalKey<NavigatorState> _discoverNavigatorKey =
+    GlobalKey<NavigatorState>(debugLabel: 'discoverNav');
+final GlobalKey<NavigatorState> _profileNavigatorKey =
+    GlobalKey<NavigatorState>(debugLabel: 'profileNav');
 
 final appRouterProvider = Provider<GoRouter>((ref) {
   final refreshNotifier = ValueNotifier<int>(0);
@@ -225,22 +227,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const CapsulesScreen(),
       ),
       GoRoute(
-        path: AppRoutes.profile,
-        name: 'profile',
-        parentNavigatorKey: rootNavigatorKey,
-        builder: (context, state) => const ProfileScreen(),
-      ),
-      GoRoute(
-        path: AppRoutes.discover,
-        name: 'discover',
-        parentNavigatorKey: rootNavigatorKey,
-        builder: (context, state) => const DiscoverScreen(),
-      ),
-      GoRoute(
-        path: AppRoutes.profileSettings,
-        name: 'profileSettings',
-        parentNavigatorKey: rootNavigatorKey,
-        builder: (context, state) => const SettingsScreen(),
+        path: AppRoutes.settings,
+        redirect: (context, state) => AppRoutes.profileSettings,
       ),
       StatefulShellRoute.indexedStack(
         builder: (context, state, navigationShell) {
@@ -281,13 +269,32 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             ],
           ),
           StatefulShellBranch(
-            navigatorKey: _settingsNavigatorKey,
+            navigatorKey: _discoverNavigatorKey,
             routes: [
               GoRoute(
-                path: AppRoutes.settings,
-                name: 'settings',
+                path: AppRoutes.discover,
+                name: 'discover',
                 pageBuilder: (context, state) =>
-                    const NoTransitionPage(child: SettingsScreen()),
+                    const NoTransitionPage(child: DiscoverScreen()),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            navigatorKey: _profileNavigatorKey,
+            routes: [
+              GoRoute(
+                path: AppRoutes.profile,
+                name: 'profile',
+                pageBuilder: (context, state) =>
+                    const NoTransitionPage(child: ProfileScreen()),
+                routes: [
+                  GoRoute(
+                    path: 'settings',
+                    name: 'settings',
+                    parentNavigatorKey: rootNavigatorKey,
+                    builder: (context, state) => const SettingsScreen(),
+                  ),
+                ],
               ),
             ],
           ),

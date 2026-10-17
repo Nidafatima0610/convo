@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
@@ -782,12 +783,351 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     );
   }
 
-  void _onShareQr(BuildContext context) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: const Text('Local mesh peer QR code sharing coming soon!'),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: AppRadius.borderMd),
+  void _showProfileShareModal(BuildContext context, ConvoUser? userProfile) {
+    if (userProfile == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Profile information unavailable')),
+      );
+      return;
+    }
+
+    HapticFeedback.mediumImpact();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => Container(
+        decoration: BoxDecoration(
+          color: sheetContext.convoColors.cardBackground,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+          border: Border(
+            top: BorderSide(
+              color: sheetContext.convoColors.cardBorder,
+              width: 1,
+            ),
+          ),
+        ),
+        padding: EdgeInsets.only(
+          left: AppSpacing.xl,
+          right: AppSpacing.xl,
+          top: AppSpacing.md,
+          bottom: MediaQuery.of(sheetContext).padding.bottom + AppSpacing.xl,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // Drag handle
+            Container(
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: sheetContext.convoColors.cardBorder,
+                borderRadius: AppRadius.borderPill,
+              ),
+            ),
+            const SizedBox(height: AppSpacing.lg),
+
+            // Badge
+            const ConvoBadge(
+              label: 'CONVO MESH IDENTITY',
+              variant: ConvoBadgeVariant.accent,
+              icon: Icons.qr_code_2_rounded,
+            ),
+            const SizedBox(height: AppSpacing.md),
+
+            // Profile info
+            ConvoAvatar(
+              initials: userProfile.initials,
+              photoUrl: userProfile.photoUrl,
+              size: 72,
+              status: ConvoAvatarStatus.meshActive,
+            ),
+            const SizedBox(height: AppSpacing.sm),
+
+            Text(
+              userProfile.name,
+              style: AppTypography.titleLarge.copyWith(
+                color: sheetContext.convoColors.textPrimary,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              userProfile.email.isNotEmpty ? userProfile.email : 'Mesh Peer',
+              style: AppTypography.bodySmall.copyWith(
+                color: sheetContext.convoColors.textSecondary,
+              ),
+            ),
+
+            const SizedBox(height: AppSpacing.lg),
+
+            // Stylized QR Preview Card
+            Container(
+              padding: const EdgeInsets.all(AppSpacing.lg),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0F172A),
+                borderRadius: AppRadius.borderLg,
+                border: Border.all(
+                  color: AppColors.primary.withValues(alpha: 0.35),
+                  width: 1.5,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppColors.primary.withValues(alpha: 0.18),
+                    blurRadius: 18,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Column(
+                children: [
+                  // QR Matrix pattern visual representation
+                  Container(
+                    width: 160,
+                    height: 160,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: AppRadius.borderMd,
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Colors.black26,
+                          blurRadius: 8,
+                          offset: Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    padding: const EdgeInsets.all(12),
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        // Finder corners & dot grid simulation
+                        Column(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                _buildQrFinderBox(),
+                                _buildQrDotPattern(),
+                                _buildQrFinderBox(),
+                              ],
+                            ),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceAround,
+                              children: [
+                                _buildQrDotPattern(),
+                                _buildQrDotPattern(),
+                                _buildQrDotPattern(),
+                              ],
+                            ),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                _buildQrFinderBox(),
+                                _buildQrDotPattern(),
+                                Container(
+                                  width: 32,
+                                  height: 32,
+                                  decoration: BoxDecoration(
+                                    color: Colors.black87,
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: const Icon(
+                                    Icons.wifi_tethering_rounded,
+                                    size: 18,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                        // Center CONVO badge
+                        Container(
+                          width: 38,
+                          height: 38,
+                          decoration: BoxDecoration(
+                            gradient: AppColors.brandGradient,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 2),
+                          ),
+                          child: const Center(
+                            child: Text(
+                              'C',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w900,
+                                fontSize: 20,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+                  Text(
+                    'Point any CONVO scanner or camera to connect',
+                    style: AppTypography.labelSmall.copyWith(
+                      color: Colors.white70,
+                      letterSpacing: 0.2,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: AppSpacing.lg),
+
+            // CONVO ID Box
+            Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.md,
+                vertical: 8,
+              ),
+              decoration: BoxDecoration(
+                color: sheetContext.convoColors.surfaceSubtle,
+                borderRadius: AppRadius.borderMd,
+                border: Border.all(
+                  color: sheetContext.convoColors.cardBorder,
+                  width: 1,
+                ),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.fingerprint_rounded,
+                    size: 20,
+                    color: AppColors.accent,
+                  ),
+                  const SizedBox(width: AppSpacing.sm),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'CONVO ID',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: sheetContext.convoColors.textTertiary,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                        Text(
+                          userProfile.uid,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: sheetContext.convoColors.textPrimary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.copy_rounded, size: 18),
+                    color: sheetContext.colorScheme.primary,
+                    tooltip: 'Copy ID',
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: userProfile.uid));
+                      HapticFeedback.lightImpact();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('CONVO ID copied to clipboard'),
+                          behavior: SnackBarBehavior.floating,
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: AppSpacing.md),
+
+            // Share & Close Buttons
+            Column(
+              children: [
+                ConvoButton(
+                  label: 'Copy Mesh Profile Link',
+                  icon: Icons.link_rounded,
+                  variant: ConvoButtonVariant.tonal,
+                  onPressed: () {
+                    final link = 'convo://user/${userProfile.uid}';
+                    Clipboard.setData(ClipboardData(text: link));
+                    HapticFeedback.lightImpact();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Mesh profile link copied!'),
+                        behavior: SnackBarBehavior.floating,
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                ConvoButton(
+                  label: 'Done',
+                  variant: ConvoButtonVariant.primaryFilled,
+                  onPressed: () => Navigator.of(sheetContext).pop(),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static Widget _buildQrFinderBox() {
+    return Container(
+      width: 36,
+      height: 36,
+      decoration: BoxDecoration(
+        color: Colors.black,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      padding: const EdgeInsets.all(5),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(3),
+        ),
+        padding: const EdgeInsets.all(3),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.black,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+      ),
+    );
+  }
+
+  static Widget _buildQrDotPattern() {
+    return SizedBox(
+      width: 32,
+      height: 32,
+      child: Wrap(
+        spacing: 3,
+        runSpacing: 3,
+        children: List.generate(
+          9,
+          (i) => Container(
+            width: 7,
+            height: 7,
+            decoration: BoxDecoration(
+              color: i % 2 == 0 ? Colors.black87 : Colors.black26,
+              borderRadius: BorderRadius.circular(1.5),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -952,7 +1292,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                       icon: Icons.qr_code_rounded,
                       variant: ConvoButtonVariant.tonal,
                       height: 44,
-                      onPressed: () => _onShareQr(context),
+                      onPressed: () => _showProfileShareModal(context, userProfile),
                     ),
                   ),
                 ],

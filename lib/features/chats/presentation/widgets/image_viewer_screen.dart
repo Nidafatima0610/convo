@@ -1,4 +1,10 @@
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_radius.dart';
@@ -150,17 +156,49 @@ class ImageViewerScreen extends StatelessWidget {
                         Icons.download_rounded,
                         color: Colors.white,
                       ),
-                      tooltip: 'Save Photo',
+                      tooltip: 'Save Image Locally',
+                      onPressed: () => _saveImageLocally(context),
+                    ),
+                    IconButton(
+                      icon: const Icon(
+                        Icons.copy_rounded,
+                        color: Colors.white,
+                        size: 20,
+                      ),
+                      tooltip: 'Copy Image Link',
                       onPressed: () {
+                        Clipboard.setData(ClipboardData(text: imageUrl));
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
-                            content: const Text('Photo saved to gallery!'),
+                            content: const Text('Image link copied to clipboard'),
                             behavior: SnackBarBehavior.floating,
+                            duration: const Duration(seconds: 2),
                             shape: RoundedRectangleBorder(
                               borderRadius: AppRadius.borderMd,
                             ),
                           ),
                         );
+                      },
+                    ),
+                    IconButton(
+                      icon: const Icon(
+                        Icons.open_in_new_rounded,
+                        color: Colors.white,
+                      ),
+                      tooltip: 'Open in Browser',
+                      onPressed: () async {
+                        final uri = Uri.tryParse(imageUrl);
+                        if (uri != null) {
+                          try {
+                            await launchUrl(uri, mode: LaunchMode.externalApplication);
+                          } catch (e) {
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Could not open link: $e')),
+                              );
+                            }
+                          }
+                        }
                       },
                     ),
                   ],
@@ -171,5 +209,52 @@ class ImageViewerScreen extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  Future<void> _saveImageLocally(BuildContext context) async {
+    try {
+      final uri = Uri.tryParse(imageUrl);
+      if (uri == null || (!uri.isScheme('http') && !uri.isScheme('https'))) {
+        throw Exception('Invalid image URL');
+      }
+
+      final dir = await getApplicationDocumentsDirectory();
+      final mediaDir = Directory('${dir.path}/convo_media');
+      if (!await mediaDir.exists()) {
+        await mediaDir.create(recursive: true);
+      }
+
+      final fileName = 'photo_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final file = File('${mediaDir.path}/$fileName');
+
+      final client = HttpClient();
+      final request = await client.getUrl(uri);
+      final response = await request.close();
+      if (response.statusCode != 200) {
+        throw Exception('Download failed with status ${response.statusCode}');
+      }
+      final bytes = await consolidateHttpClientResponseBytes(response);
+      await file.writeAsBytes(bytes);
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Saved locally: $fileName'),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: AppRadius.borderMd),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not save image: $e'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
   }
 }

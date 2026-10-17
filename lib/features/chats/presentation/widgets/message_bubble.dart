@@ -378,6 +378,8 @@ class MessageBubble extends StatelessWidget {
                       audioUrl: message.mediaUrl!,
                       durationMs: message.durationMs,
                       isMe: isMe,
+                      playbackRate: (message.metadata?['playbackSpeed'] as num?)?.toDouble() ?? 1.0,
+                      effectName: message.metadata?['effect'] as String?,
                     )
                   else if (message.isFile && message.mediaUrl != null)
                     _buildFileContent(context)
@@ -461,17 +463,36 @@ class MessageBubble extends StatelessWidget {
                         ],
                         if (isMe && !message.isDeleted) ...[
                           const SizedBox(width: 4),
-                          Icon(
-                            message.isRead
-                                ? Icons.done_all_rounded
-                                : Icons.done_rounded,
-                            size: 14,
-                            color: message.isRead
-                                ? (isMe
-                                      ? AppColors.accentLight
-                                      : AppColors.primary)
-                                : timeColor,
-                          ),
+                          if (message.isFailed)
+                            const Icon(
+                              Icons.error_outline_rounded,
+                              size: 13,
+                              color: AppColors.error,
+                            )
+                          else if (message.isQueued || message.isSending)
+                            Icon(
+                              Icons.schedule_rounded,
+                              size: 12,
+                              color: timeColor,
+                            )
+                          else if (message.isDeliveredNearby)
+                            const Icon(
+                              Icons.done_all_rounded,
+                              size: 14,
+                              color: AppColors.accent,
+                            )
+                          else
+                            Icon(
+                              message.isRead
+                                  ? Icons.done_all_rounded
+                                  : Icons.done_rounded,
+                              size: 14,
+                              color: message.isRead
+                                  ? (isMe
+                                        ? AppColors.accentLight
+                                        : AppColors.primary)
+                                  : timeColor,
+                            ),
                         ],
                       ],
                     ),
@@ -584,65 +605,68 @@ class MessageBubble extends StatelessWidget {
   }
 
   Widget _buildVideoContent(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      height: 180,
-      decoration: BoxDecoration(
-        color: Colors.black87,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          if (message.thumbnailUrl != null)
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Image.network(
-                message.thumbnailUrl!,
-                fit: BoxFit.cover,
-                width: double.infinity,
-                height: 180,
+    return GestureDetector(
+      onTap: () => _handleOpenFile(context, message.mediaUrl),
+      child: Container(
+        width: double.infinity,
+        height: 180,
+        decoration: BoxDecoration(
+          color: Colors.black87,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            if (message.thumbnailUrl != null)
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Image.network(
+                  message.thumbnailUrl!,
+                  fit: BoxFit.cover,
+                  width: double.infinity,
+                  height: 180,
+                ),
               ),
-            ),
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.6),
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(
-              Icons.play_arrow_rounded,
-              color: Colors.white,
-              size: 32,
-            ),
-          ),
-          Positioned(
-            bottom: 8,
-            left: 8,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            Container(
+              width: 48,
+              height: 48,
               decoration: BoxDecoration(
-                color: Colors.black54,
-                borderRadius: AppRadius.borderSm,
+                color: Colors.black.withValues(alpha: 0.6),
+                shape: BoxShape.circle,
               ),
-              child: Row(
-                children: [
-                  const Icon(
-                    Icons.videocam_rounded,
-                    color: Colors.white,
-                    size: 14,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    message.fileName ?? 'Video',
-                    style: const TextStyle(color: Colors.white, fontSize: 11),
-                  ),
-                ],
+              child: const Icon(
+                Icons.play_arrow_rounded,
+                color: Colors.white,
+                size: 32,
               ),
             ),
-          ),
-        ],
+            Positioned(
+              bottom: 8,
+              left: 8,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: AppRadius.borderSm,
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.videocam_rounded,
+                      color: Colors.white,
+                      size: 14,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      message.fileName ?? 'Video',
+                      style: const TextStyle(color: Colors.white, fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -227,7 +227,13 @@ class SettingsScreen extends ConsumerWidget {
         (displayName.isNotEmpty ? displayName[0].toUpperCase() : 'CO');
 
     return ConvoCard(
-      onTap: () => context.push(AppRoutes.profile),
+      onTap: () {
+        if (Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+        } else {
+          context.go(AppRoutes.profile);
+        }
+      },
       child: Row(
         children: [
           Container(

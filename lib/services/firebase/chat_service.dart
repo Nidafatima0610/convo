@@ -3,6 +3,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 
 import '../../features/auth/domain/models/convo_user.dart';
+import '../../features/capsules/domain/models/capsule_model.dart';
 import '../../features/chats/domain/models/conversation_model.dart';
 import '../../features/chats/domain/models/message_model.dart';
 import '../../features/moods/domain/models/chat_mood.dart';
@@ -21,11 +22,18 @@ class ChatService {
   CollectionReference<Map<String, dynamic>> get _usersRef =>
       _firestore.collection('users');
 
+  CollectionReference<Map<String, dynamic>> get _capsulesRef =>
+      _firestore.collection('capsules');
+
   /// Fetches an existing conversation or creates a new deterministic one for two users.
   Future<ConversationModel> getOrCreateConversation({
     required ConvoUser currentUser,
     required ConvoUser otherUser,
   }) async {
+    if (currentUser.uid.isEmpty) {
+      throw Exception('Current user UID cannot be empty');
+    }
+
     final isSelf = currentUser.uid == otherUser.uid;
     final conversationId = isSelf
         ? 'self_${currentUser.uid}'
@@ -34,7 +42,6 @@ class ChatService {
             otherUser.uid,
           );
     final docRef = _conversationsRef.doc(conversationId);
-    final doc = await docRef.get();
 
     final details = <String, Map<String, dynamic>>{
       currentUser.uid: {
@@ -51,17 +58,33 @@ class ChatService {
       };
     }
 
-    if (doc.exists && doc.data() != null) {
-      // If conversation already exists, update participant details to keep names/photos fresh
-      await docRef.set({
-        'participantDetails': details,
-      }, SetOptions(merge: true));
-
-      final updatedDoc = await docRef.get();
-      return ConversationModel.fromFirestore(updatedDoc);
+    DocumentSnapshot<Map<String, dynamic>>? doc;
+    try {
+      doc = await docRef.get().timeout(const Duration(seconds: 15));
+    } catch (networkError) {
+      debugPrint(
+        'Notice getOrCreateConversation network notice for $conversationId: $networkError. Checking local cache.',
+      );
+      try {
+        doc = await docRef.get(const GetOptions(source: Source.cache));
+      } catch (_) {
+        doc = null;
+      }
     }
 
-    // New conversation
+    if (doc != null && doc.exists && doc.data() != null) {
+      // Conversation exists: update participant details in background to keep names/photos fresh
+      docRef.set({
+        'participantDetails': details,
+      }, SetOptions(merge: true)).catchError((e) {
+        debugPrint('Notice background participantDetails update: $e');
+      });
+
+      return ConversationModel.fromFirestore(doc);
+    }
+
+    // New conversation: construct deterministic model
+    final now = DateTime.now();
     final newConversation = ConversationModel(
       id: conversationId,
       participants: isSelf
@@ -69,16 +92,23 @@ class ChatService {
           : [currentUser.uid, otherUser.uid],
       participantDetails: details,
       lastMessage: '',
-      lastMessageAt: DateTime.now(),
+      lastMessageAt: now,
       lastMessageSenderId: '',
       unreadCounts: isSelf
           ? {currentUser.uid: 0}
           : {currentUser.uid: 0, otherUser.uid: 0},
-      createdAt: DateTime.now(),
-      updatedAt: DateTime.now(),
+      createdAt: now,
+      updatedAt: now,
     );
 
-    await docRef.set(newConversation.toMap());
+    // Write to Firestore with SetOptions(merge: true).
+    // In Firestore SDK, this writes to local offline persistence immediately and syncs to backend.
+    try {
+      await docRef.set(newConversation.toMap(), SetOptions(merge: true));
+    } catch (writeErr) {
+      debugPrint('Notice writing conversation to persistence: $writeErr');
+    }
+
     return newConversation;
   }
 
@@ -581,9 +611,10 @@ class ChatService {
     return message;
   }
 
-  /// Clears all messages in a conversation.
+  /// Clears messages in a conversation safely respecting Firestore security rules.
   Future<void> clearConversationMessages({
     required String conversationId,
+    String? userId,
   }) async {
     final messagesSnap = await _conversationsRef
         .doc(conversationId)
@@ -591,15 +622,30 @@ class ChatService {
         .limit(100)
         .get();
 
+    if (messagesSnap.docs.isEmpty) return;
+
     final batch = _firestore.batch();
     for (final doc in messagesSnap.docs) {
-      batch.delete(doc.reference);
+      if (userId != null && userId.isNotEmpty) {
+        batch.update(doc.reference, {
+          'deletedFor': FieldValue.arrayUnion([userId]),
+        });
+      } else {
+        batch.update(doc.reference, {
+          'isDeleted': true,
+          'text': 'This message was deleted',
+          'reactions': {},
+          'deletedAt': FieldValue.serverTimestamp(),
+        });
+      }
     }
 
-    batch.update(_conversationsRef.doc(conversationId), {
-      'lastMessage': '',
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
+    try {
+      batch.update(_conversationsRef.doc(conversationId), {
+        'lastMessage': '',
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } catch (_) {}
 
     await batch.commit();
   }
@@ -751,8 +797,20 @@ class ChatService {
   }) async {
     final trimmed = query.trim().toLowerCase();
 
-    // Fetch registered users (limiting to 40 for efficient reads)
-    final snapshot = await _usersRef.limit(40).get();
+    // Fetch registered users (limiting to 40 for efficient reads) with resilient timeout & offline cache fallback
+    QuerySnapshot<Map<String, dynamic>> snapshot;
+    try {
+      snapshot = await _usersRef.limit(40).get().timeout(const Duration(seconds: 15));
+    } catch (e) {
+      debugPrint('Notice searchUsers server fetch failed: $e. Checking local cache.');
+      try {
+        snapshot = await _usersRef
+            .limit(40)
+            .get(const GetOptions(source: Source.cache));
+      } catch (_) {
+        rethrow;
+      }
+    }
 
     final users = snapshot.docs
         .map((doc) => ConvoUser.fromFirestore(doc))
@@ -1167,6 +1225,60 @@ class ChatService {
           : FieldValue.arrayRemove([userId]),
       'updatedAt': FieldValue.serverTimestamp(),
     });
+  }
+
+  /// Persists a time-locked message capsule to the Firestore capsules collection.
+  Future<void> saveCapsule(CapsuleModel capsule) async {
+    try {
+      await _capsulesRef
+          .doc(capsule.id)
+          .set(capsule.toMap(), SetOptions(merge: true));
+    } catch (e) {
+      debugPrint('Notice saving capsule to Firestore: $e');
+      rethrow;
+    }
+  }
+
+  /// Marks an unlocked capsule as opened in Firestore.
+  Future<void> markCapsuleOpened(String capsuleId) async {
+    try {
+      await _capsulesRef.doc(capsuleId).update({
+        'status': CapsuleStatus.opened.toValue(),
+        'openedAt': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      debugPrint('Notice marking capsule opened in Firestore: $e');
+    }
+  }
+
+  /// Real-time stream of capsules where current user is sender or receiver.
+  Stream<List<CapsuleModel>> userCapsulesStream(String userId) {
+    if (Firebase.apps.isEmpty || userId.isEmpty) return const Stream.empty();
+    try {
+      return _capsulesRef
+          .where(
+            Filter.or(
+              Filter('senderId', isEqualTo: userId),
+              Filter('receiverId', isEqualTo: userId),
+            ),
+          )
+          .snapshots()
+          .map((snapshot) {
+            final capsules = <CapsuleModel>[];
+            for (final doc in snapshot.docs) {
+              capsules.add(CapsuleModel.fromFirestore(doc));
+            }
+            capsules.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+            return capsules;
+          })
+          .handleError((error) {
+            debugPrint('userCapsulesStream notice: $error');
+            return <CapsuleModel>[];
+          });
+    } catch (e) {
+      debugPrint('Error creating userCapsulesStream: $e');
+      return const Stream.empty();
+    }
   }
 }
 

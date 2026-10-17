@@ -115,7 +115,7 @@ class OfflineSyncService {
     // Try syncing immediately with Firebase if internet is active
     if (_isFirebaseAvailable) {
       try {
-        await _writeToFirebase(queuedMessage);
+        await _writeToFirebase(queuedMessage).timeout(const Duration(seconds: 3));
         await _queueStorage.updateMessageState(
           localMessageId,
           DeliveryState.synced,
@@ -153,34 +153,49 @@ class OfflineSyncService {
     }
   }
 
+  bool _isSyncing = false;
+  bool get isSyncing => _isSyncing;
+
   /// Synchronizes all queued / locally delivered messages to Firestore idempotently.
   Future<int> syncQueuedMessagesWithFirebase() async {
-    if (!_isFirebaseAvailable) return 0;
+    if (_isSyncing) return 0;
+    _isSyncing = true;
 
-    final queue = await _queueStorage.loadQueue();
-    final toSync = queue.where((m) => !m.isSynced).toList();
-    if (toSync.isEmpty) return 0;
+    try {
+      if (!_isFirebaseAvailable) return 0;
 
-    int syncedCount = 0;
-    for (final message in toSync) {
-      try {
-        await _writeToFirebase(message);
-        await _queueStorage.updateMessageState(
-          message.localMessageId,
-          DeliveryState.synced,
-        );
-        syncedCount++;
-      } catch (e) {
-        debugPrint('Sync retry notice for ${message.localMessageId}: $e');
-        // Record retry count so that queue tracks attempts without message loss
-        await _queueStorage.enqueueMessage(
-          message.copyWith(retryCount: message.retryCount + 1),
-        );
-        break; // Stop iteration if network/auth is unavailable
+      final queue = await _queueStorage.loadQueue();
+      final toSync = queue
+          .where((m) =>
+              !m.isSynced &&
+              !m.conversationId.startsWith('nearby_') &&
+              m.receiverId.isNotEmpty)
+          .toList();
+      if (toSync.isEmpty) return 0;
+
+      int syncedCount = 0;
+      for (final message in toSync) {
+        try {
+          await _writeToFirebase(message);
+          await _queueStorage.updateMessageState(
+            message.localMessageId,
+            DeliveryState.synced,
+          );
+          syncedCount++;
+        } catch (e) {
+          debugPrint('Sync retry notice for ${message.localMessageId}: $e');
+          // Record retry count so that queue tracks attempts without message loss
+          await _queueStorage.enqueueMessage(
+            message.copyWith(retryCount: message.retryCount + 1),
+          );
+          break; // Stop iteration if network/auth is unavailable
+        }
       }
-    }
 
-    return syncedCount;
+      return syncedCount;
+    } finally {
+      _isSyncing = false;
+    }
   }
 
   Future<void> _writeToFirebase(QueuedMessage m) async {
@@ -197,25 +212,34 @@ class OfflineSyncService {
         .collection('messages')
         .doc(m.localMessageId);
 
-    // 1. Ensure conversation exists BEFORE message is written.
-    // Under firestore.rules, message creation checks that the sender is in
-    // conversation.data.participants. Creating or updating the conversation
-    // first ensures the security rule succeeds deterministically.
-    final convSnap = await conversationDoc.get();
+    // 1. Check parent conversation existence with resilient timeout
+    final convSnap = await conversationDoc
+        .get(const GetOptions(source: Source.serverAndCache))
+        .timeout(const Duration(seconds: 4));
+
+    // 2. Commit conversation header and message in a SINGLE atomic batch.
+    // Under firestore.rules, getAfter(/databases/.../conversations/$(conversationId))
+    // succeeds atomically in the same batch transaction, ensuring neither
+    // orphaned conversation nor orphaned message documents can ever be created.
+    final batch = _firestore.batch();
+
     if (!convSnap.exists || convSnap.data() == null) {
-      await conversationDoc.set({
+      final isGroup = m.receiverId == 'group';
+      batch.set(conversationDoc, {
         'id': m.conversationId,
-        'participants': [m.senderId, m.receiverId],
+        'participants': isGroup ? [m.senderId] : [m.senderId, m.receiverId],
         'lastMessage': m.text,
         'lastMessageAt': Timestamp.fromDate(m.createdAt),
         'lastMessageSenderId': m.senderId,
-        'unreadCounts': {m.senderId: 0, m.receiverId: 1},
-        'type': 'direct',
+        'unreadCounts': isGroup ? {m.senderId: 0} : {m.senderId: 0, m.receiverId: 1},
+        'type': isGroup ? 'group' : 'direct',
+        if (isGroup) 'admins': [m.senderId],
+        if (isGroup) 'createdBy': m.senderId,
         'createdAt': Timestamp.fromDate(m.createdAt),
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     } else {
-      await conversationDoc.update({
+      batch.update(conversationDoc, {
         'lastMessage': m.text,
         'lastMessageAt': Timestamp.fromDate(m.createdAt),
         'lastMessageSenderId': m.senderId,
@@ -223,9 +247,7 @@ class OfflineSyncService {
       });
     }
 
-    // 2. Now that the parent conversation document exists with sender in participants,
-    // write the message document idempotently using stable localMessageId.
-    await messageDoc.set({
+    batch.set(messageDoc, {
       'id': m.localMessageId,
       'conversationId': m.conversationId,
       'senderId': m.senderId,
@@ -237,6 +259,8 @@ class OfflineSyncService {
       'offlineOrigin': m.offlineOrigin,
       'reactions': {},
     }, SetOptions(merge: true));
+
+    await batch.commit().timeout(const Duration(seconds: 5));
   }
 
   void dispose() {

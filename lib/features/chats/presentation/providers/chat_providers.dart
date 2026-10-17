@@ -9,6 +9,7 @@ import '../../../../services/local_storage/chat_preferences_service.dart';
 import '../../../../services/notifications/notification_service.dart';
 import '../../../auth/domain/models/convo_user.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
+import '../../../capsules/domain/models/capsule_model.dart';
 import '../../domain/models/conversation_model.dart';
 import '../../domain/models/message_model.dart';
 import '../../../nearby/presentation/providers/nearby_providers.dart';
@@ -70,6 +71,14 @@ final singleConversationProvider =
       final chatService = ref.watch(chatServiceProvider);
       return chatService.conversationStream(conversationId);
     });
+
+/// Real-time stream of time-locked capsules for current user
+final userCapsulesStreamProvider = StreamProvider<List<CapsuleModel>>((ref) {
+  final authUser = ref.watch(authStateChangesProvider).asData?.value;
+  if (authUser == null) return const Stream.empty();
+  final chatService = ref.watch(chatServiceProvider);
+  return chatService.userCapsulesStream(authUser.uid);
+});
 
 const int kMessagesPageSize = 25;
 const int kConversationsPageSize = 30;
@@ -500,25 +509,44 @@ class ChatController extends Notifier<AsyncValue<void>> {
 
       // Try standard Firebase messaging transport
       if (receiverId == 'group') {
-        final chatService = ref.read(chatServiceProvider);
-        await chatService.sendMessage(
-          conversationId: conversationId,
-          senderId: currentUser.uid,
-          receiverId: 'group',
-          text: text,
-          type: type,
-          replyToMessageId: replyToMessageId,
-          replyToSnippet: replyToSnippet,
-          replyToSenderName: replyToSenderName,
-          senderName: effectiveSenderName,
-          senderPhotoUrl: effectiveSenderPhotoUrl,
-          recipientIds: recipientIds,
-          metadata: metadata,
-          expiresAt: expiresAt,
-          isSecret: isSecret,
-          isForwarded: isForwarded,
-          forwardedFrom: forwardedFrom,
-        );
+        try {
+          final chatService = ref.read(chatServiceProvider);
+          await chatService.sendMessage(
+            conversationId: conversationId,
+            senderId: currentUser.uid,
+            receiverId: 'group',
+            text: text,
+            type: type,
+            replyToMessageId: replyToMessageId,
+            replyToSnippet: replyToSnippet,
+            replyToSenderName: replyToSenderName,
+            senderName: effectiveSenderName,
+            senderPhotoUrl: effectiveSenderPhotoUrl,
+            recipientIds: recipientIds,
+            metadata: metadata,
+            expiresAt: expiresAt,
+            isSecret: isSecret,
+            isForwarded: isForwarded,
+            forwardedFrom: forwardedFrom,
+          );
+        } catch (networkError) {
+          debugPrint(
+            'Notice: group direct Firebase write fallback to offline sync: $networkError',
+          );
+          if (networkError is FirebaseException &&
+              (networkError.code == 'permission-denied' ||
+                  networkError.code == 'unauthenticated')) {
+            rethrow;
+          }
+          final offlineSync = ref.read(offlineSyncServiceProvider);
+          await offlineSync.sendOrQueueMessage(
+            conversationId: conversationId,
+            senderId: currentUser.uid,
+            receiverId: 'group',
+            text: text,
+            type: type,
+          );
+        }
       } else {
         try {
           final chatService = ref.read(chatServiceProvider);
@@ -1014,9 +1042,11 @@ class ChatController extends Notifier<AsyncValue<void>> {
 
   Future<void> clearChat(String conversationId) async {
     try {
+      final currentUserId = ref.read(authStateChangesProvider).asData?.value?.uid;
       final chatService = ref.read(chatServiceProvider);
       await chatService.clearConversationMessages(
         conversationId: conversationId,
+        userId: currentUserId,
       );
     } catch (e, st) {
       state = AsyncValue.error(e.toString(), st);

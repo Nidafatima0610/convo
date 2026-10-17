@@ -283,7 +283,7 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
               label: 'View profile',
               button: true,
               child: InkWell(
-                onTap: () => context.push(AppRoutes.profile),
+                onTap: () => context.go(AppRoutes.profile),
                 borderRadius: BorderRadius.circular(22),
                 child: Container(
                   padding: const EdgeInsets.all(2),
